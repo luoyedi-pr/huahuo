@@ -73,7 +73,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-repo/huahuo-studio.git
+git clone https://github.com/luoyedi-pr/huahuo-studio.git
 cd huahuo-studio
 
 # 安装依赖
