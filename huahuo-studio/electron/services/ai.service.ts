@@ -1944,15 +1944,35 @@ ${content}
 
   // 解析 JSON
   try {
+    // 预处理：去除 markdown 代码块标记
+    let cleanedResponse = response
+      .replace(/```json\s*/gi, '')
+      .replace(/```\s*/g, '')
+      .trim();
+
     // 尝试匹配数组格式
-    let jsonMatch = response.match(/\[[\s\S]*\]/);
+    let jsonMatch = cleanedResponse.match(/\[[\s\S]*?\](?=\s*$|\s*[^,\]\}\d])/);
+    if (!jsonMatch) {
+      // 更宽松的数组匹配
+      jsonMatch = cleanedResponse.match(/\[[\s\S]*\]/);
+    }
+
     if (!jsonMatch) {
       // 尝试匹配对象中的 shots 数组
-      const objMatch = response.match(/\{[\s\S]*\}/);
+      // 使用更精确的匹配：找到第一个完整的 JSON 对象
+      const objMatch = cleanedResponse.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/);
       if (objMatch) {
-        const obj = JSON.parse(objMatch[0]);
-        if (obj.shots) {
-          jsonMatch = [JSON.stringify(obj.shots)];
+        try {
+          const obj = JSON.parse(objMatch[0]);
+          if (obj.shots) {
+            jsonMatch = [JSON.stringify(obj.shots)];
+          }
+        } catch {
+          // 对象解析失败，尝试提取 shots 数组
+          const shotsMatch = cleanedResponse.match(/"shots"\s*:\s*(\[[\s\S]*?\])(?=\s*[,}])/);
+          if (shotsMatch) {
+            jsonMatch = [shotsMatch[1]];
+          }
         }
       }
     }

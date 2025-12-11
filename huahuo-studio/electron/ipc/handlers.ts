@@ -284,15 +284,7 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('scene:create', async (_, projectId: string, data: any) => {
-    console.log('[IPC scene:create] 接收到创建场景请求:', { projectId, data });
-    try {
-      const sceneId = await createScene({ projectId, ...data });
-      console.log('[IPC scene:create] 场景创建成功, ID:', sceneId);
-      return sceneId;
-    } catch (error) {
-      console.error('[IPC scene:create] 创建场景失败:', error);
-      throw error;
-    }
+    return await createScene({ projectId, ...data });
   });
 
   ipcMain.handle('scene:create-batch', async (_, projectId: string, scenesData: any[]) => {

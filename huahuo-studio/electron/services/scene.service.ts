@@ -153,9 +153,14 @@ export async function createScene(data: {
     updatedAt: now,
   };
 
-  console.log(`[createScene] 插入数据字段数: ${Object.keys(insertData).length}`, Object.keys(insertData));
+  console.log(`[createScene] 插入数据: projectId=${data.projectId}, name=${data.name}`);
 
-  await db.insert(scenes).values(insertData);
+  try {
+    await db.insert(scenes).values(insertData);
+  } catch (error) {
+    console.error(`[createScene] 数据库插入失败:`, error);
+    throw error;
+  }
 
   await touchProject(data.projectId);
   return id;

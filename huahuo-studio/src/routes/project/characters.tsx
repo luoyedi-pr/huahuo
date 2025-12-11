@@ -114,7 +114,9 @@ export default function ProjectCharactersPage() {
   // 显示消息
   const showMessage = (type: 'success' | 'error' | 'info', text: string) => {
     setMessage({ type, text });
-    setTimeout(() => setMessage(null), 3000);
+    // 错误消息显示 10 秒，其他消息显示 3 秒
+    const duration = type === 'error' ? 10000 : 3000;
+    setTimeout(() => setMessage(null), duration);
   };
 
   // 清理重复角色
