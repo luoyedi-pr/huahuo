@@ -1,0 +1,187 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-bg-primary text-text-primary;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* 滚动条样式 */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-bg-secondary;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border hover:bg-border-hover;
+    border: 2px solid transparent;
+  }
+
+  ::-webkit-scrollbar-corner {
+    @apply bg-bg-secondary;
+  }
+
+  /* 选中文本样式 */
+  ::selection {
+    @apply bg-primary-main/30 text-text-primary;
+  }
+}
+
+@layer components {
+  /* 像素化按钮基础样式 */
+  .pixel-btn {
+    @apply relative inline-flex items-center justify-center;
+    @apply px-4 py-2 font-pixel text-sm;
+    @apply border-2 border-black;
+    @apply transition-all duration-100;
+    @apply shadow-pixel;
+    @apply select-none cursor-pointer;
+  }
+
+  .pixel-btn:hover {
+    @apply shadow-pixel-hover;
+    transform: translate(2px, 2px);
+  }
+
+  .pixel-btn:active {
+    @apply shadow-pixel-active;
+    transform: translate(4px, 4px);
+  }
+
+  .pixel-btn:disabled {
+    @apply opacity-50 cursor-not-allowed;
+    @apply shadow-pixel;
+    transform: none;
+  }
+
+  /* 像素化卡片基础样式 */
+  .pixel-card {
+    @apply relative;
+    @apply border-2 border-black;
+    @apply bg-bg-secondary;
+    @apply shadow-pixel;
+  }
+
+  /* 像素化输入框基础样式 */
+  .pixel-input {
+    @apply w-full px-3 py-2;
+    @apply bg-bg-tertiary;
+    @apply border-2 border-black;
+    @apply text-text-primary placeholder:text-text-muted;
+    @apply focus:outline-none focus:border-primary-main;
+    @apply transition-colors duration-150;
+  }
+
+  /* 霓虹发光效果 */
+  .glow-pink {
+    @apply shadow-glow-pink;
+  }
+
+  .glow-cyan {
+    @apply shadow-glow-cyan;
+  }
+
+  /* 像素化边框 */
+  .pixel-border {
+    @apply border-2 border-black;
+  }
+
+  /* 状态指示器 */
+  .status-dot {
+    @apply w-2 h-2 rounded-none;
+  }
+
+  .status-dot-success {
+    @apply bg-status-success;
+  }
+
+  .status-dot-warning {
+    @apply bg-status-warning;
+  }
+
+  .status-dot-error {
+    @apply bg-status-error;
+  }
+
+  .status-dot-info {
+    @apply bg-status-info;
+  }
+}
+
+@layer utilities {
+  /* Electron 窗口拖拽区域 */
+  .app-drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  /* 像素化文字效果 */
+  .text-pixel-shadow {
+    text-shadow: 2px 2px 0 #000;
+  }
+
+  /* 隐藏滚动条但保持滚动功能 */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* 像素化渐变背景 */
+  .bg-pixel-gradient {
+    background: linear-gradient(
+      180deg,
+      theme('colors.bg.primary') 0%,
+      theme('colors.bg.secondary') 100%
+    );
+  }
+
+  /* 扫描线效果 */
+  .scanlines {
+    position: relative;
+  }
+
+  .scanlines::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.1) 0px,
+      rgba(0, 0, 0, 0.1) 1px,
+      transparent 1px,
+      transparent 2px
+    );
+    pointer-events: none;
+  }
+
+  /* CRT 屏幕效果 */
+  .crt-effect {
+    animation: crt-flicker 0.15s infinite;
+  }
+
+  @keyframes crt-flicker {
+    0% { opacity: 0.97; }
+    50% { opacity: 1; }
+    100% { opacity: 0.98; }
+  }
+}
