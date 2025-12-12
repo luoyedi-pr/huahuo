@@ -922,8 +922,9 @@ export async function fetchImageModels(): Promise<{ success: boolean; models: Mo
       case 'aliyun':
         // 阿里云通义千问图像模型 (Qwen-Image)
         models = [
-          { id: 'qwen-image-plus', name: '通义千问图像 Plus (推荐)', provider: '阿里云' },
-          { id: 'qwen-image', name: '通义千问图像', provider: '阿里云' },
+          { id: 'qwen-image-plus', name: '通义千问图像 Plus (生成)', provider: '阿里云' },
+          { id: 'qwen-image-edit-plus', name: '通义千问图像 Edit Plus (修改)', provider: '阿里云' },
+          { id: 'qwen-image', name: '通义千问图像 (基础)', provider: '阿里云' },
         ];
         break;
 

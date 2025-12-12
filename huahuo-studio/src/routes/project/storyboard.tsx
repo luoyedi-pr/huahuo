@@ -12,7 +12,7 @@ import { PixelModal } from '@/components/ui/pixel-modal';
 import {
   IconPlus, IconRefresh, IconPlay, IconImage,
   IconChevronLeft, IconChevronRight, IconSave, IconVideo,
-  IconTrash, IconCheck, IconWarning, IconEdit,
+  IconTrash, IconCheck, IconWarning, IconEdit, IconMagic,
 } from '@/components/ui/pixel-icons';
 import { cn, getLocalFileUrl } from '@/lib/utils';
 import { useTaskNotification } from '@/contexts/TaskNotificationContext';

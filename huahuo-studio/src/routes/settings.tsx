@@ -29,6 +29,7 @@ interface AppSettings {
   imageCustomBaseUrl: string;
   imageCustomApiKey: string;
   defaultImageModel: string;
+  defaultImageEditModel: string;
   defaultImageSize: string;
   imageAspectRatio: string;
 
@@ -74,6 +75,7 @@ const defaultSettings: AppSettings = {
   imageCustomBaseUrl: '',
   imageCustomApiKey: '',
   defaultImageModel: 'gemini-3-pro-image-preview',
+  defaultImageEditModel: 'gemini-3-pro-image-preview',
   defaultImageSize: '2K',
   imageAspectRatio: '16:9',
 
@@ -257,6 +259,8 @@ export default function SettingsPage() {
 
         setTextModels(ensureModelInList(textM, data.defaultTextModel));
         setImageModels(ensureModelInList(imageM, data.defaultImageModel));
+        // 确保编辑模型也在列表中
+        setImageModels(prev => ensureModelInList(prev, data.defaultImageEditModel));
         setVideoModels(ensureModelInList(videoM, data.defaultVideoModel));
         setAspectRatios(aspectR);
         setImageSizes(imageS);
@@ -713,14 +717,26 @@ export default function SettingsPage() {
                   className="mb-2"
                 />
               )}
-              <PixelSelect
-                value={settings.defaultImageModel}
-                onChange={(value) => setSettings({ ...settings, defaultImageModel: value })}
-                options={filteredImageModels.map(m => ({
-                  value: m.id,
-                  label: `${m.name}`,
-                }))}
-              />
+              <div className="space-y-2">
+                <PixelSelect
+                  label="生成模型"
+                  value={settings.defaultImageModel}
+                  onChange={(value) => setSettings({ ...settings, defaultImageModel: value })}
+                  options={filteredImageModels.map(m => ({
+                    value: m.id,
+                    label: `${m.name}`,
+                  }))}
+                />
+                <PixelSelect
+                  label="修改模型"
+                  value={settings.defaultImageEditModel}
+                  onChange={(value) => setSettings({ ...settings, defaultImageEditModel: value })}
+                  options={filteredImageModels.map(m => ({
+                    value: m.id,
+                    label: `${m.name}`,
+                  }))}
+                />
+              </div>
               {imageModels.length > 0 && (
                 <p className="text-xs text-text-muted mt-1">
                   共 {imageModels.length} 个{imageModelSearch && filteredImageModels.length !== imageModels.length && `，筛选 ${filteredImageModels.length}`}

@@ -734,6 +734,17 @@ export function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle('ai:edit-scene-image', async (event, sceneId: string, prompt: string) => {
+    try {
+      const imagePath = await import('../services/ai.service').then(m => m.editSceneImage(sceneId, prompt, (progress) => {
+        event.sender.send('ai:progress', { taskType: 'scene-image-edit', sceneId, progress });
+      }));
+      return imagePath;
+    } catch (error) {
+      throw new Error(`场景图像编辑失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  });
+
   ipcMain.handle('ai:generate-video', async (event, shotId: string) => {
     try {
       const videoPath = await generateShotVideo(shotId, (progress) => {

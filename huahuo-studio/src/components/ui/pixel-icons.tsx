@@ -77,6 +77,11 @@ export const IconClose = createPixelIcon(
   'IconClose'
 );
 
+export const IconX = createPixelIcon(
+  <><line x1="4" y1="4" x2="20" y2="20" /><line x1="20" y1="4" x2="4" y2="20" /></>,
+  'IconX'
+);
+
 export const IconCheck = createPixelIcon(
   <polyline points="4,12 9,17 20,6" />,
   'IconCheck'
@@ -206,7 +211,7 @@ export const Icons = {
   Refresh: IconRefresh, Play: IconPlay, Pause: IconPause, Image: IconImage,
   Video: IconVideo, Folder: IconFolder, File: IconFile, Search: IconSearch,
   Menu: IconMenu, AI: IconAI, Bolt: IconBolt, Warning: IconWarning, Info: IconInfo,
-  Database: IconDatabase,
+  Database: IconDatabase, X: IconX,
 };
 
 export default Icons;

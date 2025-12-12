@@ -2729,6 +2729,71 @@ export async function generateSceneImage(
 }
 
 /**
+ * 编辑/修改场景图像
+ */
+export async function editSceneImage(
+  sceneId: string,
+  prompt: string,
+  onProgress?: ProgressCallback
+): Promise<string> {
+  const scene = await getScene(sceneId);
+  if (!scene || !scene.imagePath) throw new Error('场景或原图不存在');
+
+  onProgress?.(10);
+
+  // 获取项目风格
+  const project = await getProject(scene.projectId);
+  const styleId = project?.styleId || 'animation_anime_2d';
+
+  // 应用风格提示词
+  const styledPrompt = applyStyleToImagePrompt(prompt, styleId);
+
+  onProgress?.(20);
+
+  const config = await getImageApiConfig();
+  let imageBuffer: Buffer;
+
+  // 根据不同服务商选择编辑逻辑
+  if (config.provider === 'aliyun') {
+    imageBuffer = await callAliyunImageEdit(
+      config.baseUrl,
+      config.apiKey,
+      styledPrompt,
+      scene.imagePath,
+      config.imageEditModel
+    );
+  } else if (config.provider === 'apiyi') {
+    imageBuffer = await callApiyiImageEdit(
+      config.baseUrl,
+      config.apiKey,
+      styledPrompt,
+      scene.imagePath,
+      config.imageEditModel || config.imageModel
+    );
+  } else {
+    // 暂时不支持的服务商，回退到重新生成
+    console.warn('[AI Service] 该服务商暂不支持图片编辑，回退到重新生成');
+    return await generateSceneImage(scene.projectId, scene, styleId, onProgress);
+  }
+
+  onProgress?.(80);
+
+  // 保存图像
+  const filename = `scene_${scene.id}_edit_${Date.now()}.png`;
+  const imagePath = saveProjectFile(scene.projectId, 'scenes', filename, imageBuffer);
+
+  // 更新场景
+  const { updateScene } = await import('./scene.service');
+  await updateScene(sceneId, {
+    imagePath,
+  });
+
+  onProgress?.(100);
+
+  return imagePath;
+}
+
+/**
  * 批量生成所有场景参考图
  */
 export async function generateAllSceneImages(

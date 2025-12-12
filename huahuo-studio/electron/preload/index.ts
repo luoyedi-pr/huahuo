@@ -71,6 +71,8 @@ const electronAPI = {
       // AI API
       'ai:generate-text',
       'ai:generate-image',
+      'ai:edit-image',
+      'ai:edit-scene-image',
       'ai:generate-video',
       // 设置
       'settings:get',
