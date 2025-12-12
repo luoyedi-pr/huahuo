@@ -85,6 +85,7 @@ export interface IpcHandlers {
   // AI
   'ai:generate-text': (prompt: string, systemPrompt?: string) => Promise<string>;
   'ai:generate-image': (shotId: string) => Promise<string>;
+  'ai:edit-image': (shotId: string, prompt: string) => Promise<string>;
   'ai:generate-video': (shotId: string) => Promise<string>;
 }
 

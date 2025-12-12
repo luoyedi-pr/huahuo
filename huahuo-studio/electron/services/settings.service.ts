@@ -29,6 +29,7 @@ export interface AppSettings {
   imageCustomBaseUrl: string;
   imageCustomApiKey: string;
   defaultImageModel: string;
+  defaultImageEditModel: string; // 图片修改模型
   defaultImageSize: string;
   imageAspectRatio: string;
 
@@ -72,6 +73,7 @@ const defaultSettings: AppSettings = {
   imageCustomBaseUrl: '',
   imageCustomApiKey: '',
   defaultImageModel: 'gemini-3-pro-image-preview',
+  defaultImageEditModel: 'gemini-3-pro-image-preview',
   defaultImageSize: '2K',
   imageAspectRatio: '16:9',
 
@@ -237,6 +239,7 @@ export async function getImageApiConfig() {
         baseUrl: 'https://api.apiyi.com',
         apiKey: settings.imageApiyiApiKey,
         imageModel: settings.defaultImageModel,
+        imageEditModel: settings.defaultImageEditModel,
         imageSize: settings.defaultImageSize,
         imageAspectRatio: settings.imageAspectRatio,
       };
@@ -246,6 +249,7 @@ export async function getImageApiConfig() {
         baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
         apiKey: settings.imageAliyunApiKey,
         imageModel: settings.defaultImageModel || 'qwen-image-plus',
+        imageEditModel: settings.defaultImageEditModel || 'qwen-image-edit-plus',
         imageSize: settings.defaultImageSize,
         imageAspectRatio: settings.imageAspectRatio,
       };
@@ -254,6 +258,7 @@ export async function getImageApiConfig() {
         provider: 'official' as const,
         geminiApiKey: settings.imageOfficialGeminiKey,
         imageModel: settings.defaultImageModel,
+        imageEditModel: settings.defaultImageEditModel,
         imageSize: settings.defaultImageSize,
         imageAspectRatio: settings.imageAspectRatio,
       };
@@ -264,6 +269,7 @@ export async function getImageApiConfig() {
         baseUrl: settings.imageCustomBaseUrl,
         apiKey: settings.imageCustomApiKey,
         imageModel: settings.defaultImageModel,
+        imageEditModel: settings.defaultImageEditModel,
         imageSize: settings.defaultImageSize,
         imageAspectRatio: settings.imageAspectRatio,
       };
@@ -327,6 +333,7 @@ export async function getApiConfig() {
       claudeApiKey: 'claudeApiKey' in llmConfig ? llmConfig.claudeApiKey : undefined,
       textModel: llmConfig.textModel,
       imageModel: imageConfig.imageModel,
+      imageEditModel: imageConfig.imageEditModel,
       imageSize: imageConfig.imageSize,
       imageAspectRatio: imageConfig.imageAspectRatio,
       videoModel: videoConfig.videoModel,
@@ -341,6 +348,7 @@ export async function getApiConfig() {
       claudeApiKey: settings.claudeApiKey,
       textModel: settings.defaultTextModel,
       imageModel: settings.defaultImageModel,
+      imageEditModel: settings.defaultImageEditModel,
       imageSize: settings.defaultImageSize,
       imageAspectRatio: settings.imageAspectRatio,
       videoModel: settings.defaultVideoModel,
@@ -354,6 +362,7 @@ export async function getApiConfig() {
       apiKey: settings.apiyiApiKey,
       textModel: settings.defaultTextModel,
       imageModel: settings.defaultImageModel,
+      imageEditModel: settings.defaultImageEditModel,
       imageSize: settings.defaultImageSize,
       imageAspectRatio: settings.imageAspectRatio,
       videoModel: settings.defaultVideoModel,
@@ -366,6 +375,7 @@ export async function getApiConfig() {
     apiKey: settings.aggregatorApiKey,
     textModel: settings.defaultTextModel,
     imageModel: settings.defaultImageModel,
+    imageEditModel: settings.defaultImageEditModel,
     imageSize: settings.defaultImageSize,
     imageAspectRatio: settings.imageAspectRatio,
     videoModel: settings.defaultVideoModel,

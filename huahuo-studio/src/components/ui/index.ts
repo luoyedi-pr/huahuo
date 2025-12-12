@@ -6,3 +6,4 @@ export * from './pixel-textarea';
 export * from './pixel-progress';
 export * from './pixel-badge';
 export * from './pixel-icons';
+export * from './pixel-modal';

@@ -8,10 +8,11 @@ import { PixelInput } from '@/components/ui/pixel-input';
 import { PixelBadge } from '@/components/ui/pixel-badge';
 import { PixelProgress } from '@/components/ui/pixel-progress';
 import { PixelLoading } from '@/components/ui/pixel-loading';
+import { PixelModal } from '@/components/ui/pixel-modal';
 import {
   IconPlus, IconRefresh, IconPlay, IconImage,
   IconChevronLeft, IconChevronRight, IconSave, IconVideo,
-  IconTrash, IconCheck, IconWarning,
+  IconTrash, IconCheck, IconWarning, IconEdit,
 } from '@/components/ui/pixel-icons';
 import { cn, getLocalFileUrl } from '@/lib/utils';
 import { useTaskNotification } from '@/contexts/TaskNotificationContext';
@@ -179,6 +180,11 @@ export default function ProjectStoryboardPage() {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
+
+  // 图片编辑状态
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editPrompt, setEditPrompt] = useState('');
+  const [isEditingImage, setIsEditingImage] = useState(false);
 
   // 批量生成状态
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
@@ -365,6 +371,44 @@ export default function ProjectStoryboardPage() {
       showMessage('error', error instanceof Error ? error.message : '生成图像失败');
     } finally {
       setIsGeneratingImage(false);
+      setGenerationProgress(0);
+    }
+  };
+
+  // 打开编辑模态框
+  const openEditModal = () => {
+    if (!selectedShot || !selectedShot.imagePath) return;
+    setEditPrompt(selectedShot.description || '');
+    setIsEditModalOpen(true);
+  };
+
+  // 提交图片编辑
+  const handleEditImage = async () => {
+    if (!selectedId || !editPrompt) return;
+
+    try {
+      setIsEditingImage(true);
+      setGenerationProgress(0);
+
+      const progressHandler = (...args: unknown[]) => {
+        const data = args[0] as { progress: number };
+        if (data?.progress !== undefined) {
+          setGenerationProgress(data.progress);
+        }
+      };
+      window.electron.on('ai:progress', progressHandler);
+
+      await window.electron.invoke('ai:edit-image', selectedId, editPrompt);
+
+      window.electron.off('ai:progress', progressHandler);
+      await loadData();
+      showMessage('success', '图像修改成功');
+      setIsEditModalOpen(false);
+    } catch (error) {
+      console.error('修改图像失败:', error);
+      showMessage('error', error instanceof Error ? error.message : '修改图像失败');
+    } finally {
+      setIsEditingImage(false);
       setGenerationProgress(0);
     }
   };
@@ -609,13 +653,25 @@ export default function ProjectStoryboardPage() {
         <div className="flex-1 p-6 flex flex-col items-center justify-center bg-bg-primary">
           {selectedShot ? (
             <>
-              <div className="w-full max-w-2xl aspect-video bg-bg-secondary border-2 border-black shadow-pixel flex items-center justify-center mb-4 overflow-hidden">
+              <div className="w-full max-w-2xl aspect-video bg-bg-secondary border-2 border-black shadow-pixel flex items-center justify-center mb-4 overflow-hidden relative group">
                 {selectedShot.imagePath ? (
-                  <img
-                    src={getLocalFileUrl(selectedShot.imagePath) || ''}
-                    alt=""
-                    className="w-full h-full object-contain"
-                  />
+                  <>
+                    <img
+                      src={getLocalFileUrl(selectedShot.imagePath) || ''}
+                      alt=""
+                      className="w-full h-full object-contain"
+                    />
+                    {/* 图片操作遮罩 */}
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
+                      <PixelButton
+                        variant="primary"
+                        leftIcon={<IconEdit size={16} />}
+                        onClick={openEditModal}
+                      >
+                        修改图片
+                      </PixelButton>
+                    </div>
+                  </>
                 ) : isGeneratingImage ? (
                   <div className="text-center">
                     <PixelProgress value={generationProgress} variant="gradient" className="w-48 mb-2" />
@@ -906,6 +962,82 @@ export default function ProjectStoryboardPage() {
           </div>
         </div>
       </div>
+
+      {/* 图片修改模态框 */}
+      <PixelModal
+        isOpen={isEditModalOpen}
+        onClose={() => !isEditingImage && setIsEditModalOpen(false)}
+        title="修改图片"
+        size="lg"
+        footer={
+          <>
+            <PixelButton
+              variant="ghost"
+              onClick={() => setIsEditModalOpen(false)}
+              disabled={isEditingImage}
+            >
+              取消
+            </PixelButton>
+            <PixelButton
+              variant="primary"
+              onClick={handleEditImage}
+              loading={isEditingImage}
+              leftIcon={<IconMagic size={14} />}
+            >
+              开始修改
+            </PixelButton>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-pixel text-text-secondary mb-2">原始图片</label>
+              <div className="aspect-video bg-bg-tertiary border-2 border-black flex items-center justify-center overflow-hidden">
+                {selectedShot?.imagePath ? (
+                  <img
+                    src={getLocalFileUrl(selectedShot.imagePath) || ''}
+                    alt="Original"
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <IconImage size={32} className="text-text-muted" />
+                )}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-pixel text-text-secondary mb-2">修改预览</label>
+              <div className="aspect-video bg-bg-tertiary border-2 border-black flex items-center justify-center relative">
+                {isEditingImage ? (
+                  <div className="text-center w-full px-4">
+                    <PixelProgress value={generationProgress} variant="gradient" className="mb-2" />
+                    <p className="text-xs text-text-muted">AI 正在修改中... {generationProgress}%</p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-text-muted">点击"开始修改"生成预览</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <PixelTextarea
+            label="修改提示词"
+            value={editPrompt}
+            onChange={(e) => setEditPrompt(e.target.value)}
+            rows={4}
+            placeholder="描述你想要修改的内容，例如：'把背景改成下雨天'，'给人物戴上帽子'..."
+          />
+          
+          <div className="text-xs text-text-muted bg-bg-tertiary p-2 border border-border">
+            <p className="mb-1 font-bold">💡 修改建议：</p>
+            <ul className="list-disc list-inside space-y-1">
+              <li>保持主要描述不变，只修改需要调整的部分</li>
+              <li>如果是阿里云，将使用 qwen-image-edit-plus 模型</li>
+              <li>如果是 Nano Banana Pro (API易)，将使用图生图模式</li>
+            </ul>
+          </div>
+        </div>
+      </PixelModal>
     </div>
   );
 }

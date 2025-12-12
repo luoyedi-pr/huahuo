@@ -1,4 +1,5 @@
 import { getLlmApiConfig, getImageApiConfig, getVideoApiConfig } from './settings.service';
+import { getScene } from './scene.service';
 import { getShot, updateShot } from './shot.service';
 import { getCharacter } from './character.service';
 import { getProject } from './project.service';
@@ -420,10 +421,19 @@ export async function generateShotImage(
   let prompt = '';
 
   // 1. 场景环境信息
+  let sceneDescription = '';
+  if (shot.sceneId) {
+    const scene = await getScene(shot.sceneId);
+    if (scene && scene.description) {
+      sceneDescription = scene.description;
+      prompt += `场景描述: ${scene.description}\n`;
+    }
+  }
+
   if (shot.location || shot.timeOfDay) {
-    prompt += `场景: ${shot.location || '未知地点'}`;
+    prompt += `地点: ${shot.location || '未知地点'}`;
     if (shot.timeOfDay) {
-      prompt += `，${shot.timeOfDay}`;
+      prompt += `，时间: ${shot.timeOfDay}`;
     }
     prompt += '\n';
   }
@@ -434,7 +444,7 @@ export async function generateShotImage(
   }
 
   // 3. 画面描述
-  prompt += `\n画面描述: ${shot.description}`;
+  prompt += `\n当前画面内容: ${shot.description}`;
 
   // 4. 动作描述
   if (shot.action) {
@@ -488,6 +498,75 @@ export async function generateShotImage(
 
   // 保存图像
   const filename = `shot_${shot.index}_${Date.now()}.png`;
+  const imagePath = saveProjectFile(shot.projectId, 'images', filename, imageBuffer);
+
+  // 更新分镜
+  await updateShot(shotId, {
+    imagePath,
+    status: 'ready',
+  });
+
+  onProgress?.(100);
+
+  return imagePath;
+}
+
+/**
+ * 编辑/修改分镜图像
+ * 基于原图和提示词进行修改
+ */
+export async function editShotImage(
+  shotId: string,
+  prompt: string,
+  onProgress?: ProgressCallback
+): Promise<string> {
+  const shot = await getShot(shotId);
+  if (!shot || !shot.imagePath) throw new Error('分镜或原图不存在');
+
+  onProgress?.(10);
+
+  // 获取项目风格
+  const project = await getProject(shot.projectId);
+  const styleId = project?.styleId || 'animation_anime_2d';
+
+  // 应用风格提示词
+  const styledPrompt = applyStyleToImagePrompt(prompt, styleId);
+
+  onProgress?.(20);
+
+  const config = await getImageApiConfig();
+  let imageBuffer: Buffer;
+
+  // 根据不同服务商选择编辑逻辑
+  if (config.provider === 'aliyun') {
+    // 阿里云使用 qwen-image-edit-plus
+    imageBuffer = await callAliyunImageEdit(
+      config.baseUrl,
+      config.apiKey,
+      styledPrompt,
+      shot.imagePath,
+      config.imageEditModel
+    );
+  } else if (config.provider === 'apiyi') {
+    // API易 (Nano Banana Pro) 支持图生图/编辑
+    imageBuffer = await callApiyiImageEdit(
+      config.baseUrl,
+      config.apiKey,
+      styledPrompt,
+      shot.imagePath,
+      config.imageEditModel || config.imageModel // 优先使用编辑模型，否则使用生成模型
+    );
+  } else {
+    // 其他服务尝试使用 DALL-E 编辑接口或回退到普通生成
+    // 暂时回退到普通生成
+    console.warn('[AI Service] 该服务商暂不支持图片编辑，回退到重新生成');
+    return await generateShotImage(shotId, onProgress);
+  }
+
+  onProgress?.(80);
+
+  // 保存图像 (覆盖原图或创建新图? 这里选择创建新图并更新引用)
+  const filename = `shot_${shot.index}_edit_${Date.now()}.png`;
   const imagePath = saveProjectFile(shot.projectId, 'images', filename, imageBuffer);
 
   // 更新分镜
@@ -654,6 +733,83 @@ async function callApiyiImage(
 }
 
 /**
+ * API易 图像编辑 (Google native format)
+ * 将原图作为输入的一部分
+ */
+async function callApiyiImageEdit(
+  baseUrl: string,
+  apiKey: string,
+  prompt: string,
+  imagePath: string,
+  model = 'gemini-3-pro-image-preview'
+): Promise<Buffer> {
+  const url = `${baseUrl}/v1beta/models/${model}:generateContent`;
+
+  console.log('[AI Service] 图像编辑请求:', url);
+  console.log('[AI Service] 图像模型:', model);
+
+  // 读取原图并转为 base64
+  const fs = await import('fs');
+  const path = await import('path');
+  const imageBuffer = fs.readFileSync(imagePath);
+  const ext = path.extname(imagePath).toLowerCase();
+  
+  // 简化的 MIME 类型映射
+  const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+  const base64Image = imageBuffer.toString('base64');
+
+  let response: { ok: boolean; status: number; text: () => Promise<string>; json: () => Promise<any> };
+  try {
+    response = await electronFetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType,
+                data: base64Image
+              }
+            }
+          ],
+        }],
+        generationConfig: {
+          responseModalities: ['IMAGE'],
+        },
+      }),
+      timeout: 180000,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    console.error('[AI Service] 图像编辑请求失败:', message);
+    throw new Error(`图像编辑网络请求失败: ${message}`);
+  }
+
+  if (!response.ok) {
+    const error = await response.text();
+    console.error('[AI Service] 图像编辑错误响应:', error);
+    throw new Error(parseApiError(`API易 图像编辑错误: ${response.status} - ${error}`));
+  }
+
+  const data = await response.json();
+
+  const imagePart = data.candidates?.[0]?.content?.parts?.find(
+    (p: { inlineData?: { data: string; mimeType: string } }) => p.inlineData?.data
+  );
+
+  if (!imagePart?.inlineData?.data) {
+    throw new Error('未能生成/编辑图像');
+  }
+
+  return Buffer.from(imagePart.inlineData.data, 'base64');
+}
+
+/**
  * 阿里云通义千问图像生成 (Qwen-Image)
  * 使用 DashScope 同步接口 (推荐)
  * 文档: https://help.aliyun.com/zh/model-studio/qwen-image
@@ -738,6 +894,83 @@ async function callAliyunImage(
   console.log('[AI Service] 阿里云图像URL:', imageUrl);
 
   // 下载图像 - 使用带重试的下载函数
+  return await downloadImageWithRetry(imageUrl);
+}
+
+/**
+ * 阿里云图像编辑 (qwen-image-edit-plus)
+ * 用于修改已生成的图片
+ */
+async function callAliyunImageEdit(
+  baseUrl: string,
+  apiKey: string,
+  prompt: string,
+  imagePath: string,
+  model = 'qwen-image-edit-plus'
+): Promise<Buffer> {
+  const url = `${baseUrl}/services/aigc/multimodal-generation/generation`;
+
+  console.log('[AI Service] 阿里云图像编辑请求:', url);
+  console.log('[AI Service] 使用编辑模型:', model);
+  
+  // 读取原图并转为 Base64
+  const fs = await import('fs');
+  const path = await import('path');
+  const imageBuffer = fs.readFileSync(imagePath);
+  const ext = path.extname(imagePath).toLowerCase();
+  
+  const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+  const base64Image = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+
+  let response: { ok: boolean; status: number; text: () => Promise<string>; json: () => Promise<any> };
+  try {
+    response = await electronFetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model, // 使用传入的模型参数
+        input: {
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { image: base64Image },
+                { text: prompt }
+              ]
+            }
+          ]
+        },
+        parameters: {
+          // 编辑模型通常不需要指定尺寸，它会保持原图比例
+          // 但根据文档可能需要 size 参数，这里暂时省略，让其自适应或使用默认
+          n: 1,
+          watermark: false,
+        },
+      }),
+      timeout: 180000,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    console.error('[AI Service] 阿里云图像编辑请求失败:', message);
+    throw new Error(`阿里云图像编辑网络请求失败: ${message}`);
+  }
+
+  if (!response.ok) {
+    const error = await response.text();
+    console.error('[AI Service] 阿里云图像编辑错误响应:', error);
+    throw new Error(parseApiError(`阿里云图像编辑错误: ${response.status} - ${error}`));
+  }
+
+  const data = await response.json();
+  const imageUrl = data.output?.choices?.[0]?.message?.content?.[0]?.image;
+
+  if (!imageUrl) {
+    throw new Error('阿里云图像编辑失败: 未获取到图像URL');
+  }
+
   return await downloadImageWithRetry(imageUrl);
 }
 
@@ -921,13 +1154,20 @@ export async function generateShotVideo(
   let prompt = '';
 
   // 1. 场景信息
+  if (shot.sceneId) {
+    const scene = await getScene(shot.sceneId);
+    if (scene && scene.description) {
+      prompt += `场景描述: ${scene.description}\n`;
+    }
+  }
+
   if (shot.sceneInfo || shot.location || shot.timeOfDay) {
-    prompt += '场景: ';
+    prompt += '地点: ';
     if (shot.location) {
       prompt += shot.location;
     }
     if (shot.timeOfDay) {
-      prompt += `，${shot.timeOfDay}`;
+      prompt += `，时间: ${shot.timeOfDay}`;
     }
     prompt += '\n';
   }
@@ -938,7 +1178,7 @@ export async function generateShotVideo(
   }
 
   // 3. 画面描述
-  prompt += `\n画面描述: ${shot.description}`;
+  prompt += `\n当前画面内容: ${shot.description}`;
 
   // 4. 动作描述
   if (shot.action) {
@@ -1877,35 +2117,35 @@ ${phase1Result.storyOutline.setting}
 
 ## 分镜生成规则
 
-### 1. 完整性（最重要！）
-- **你必须完整地将整个故事转换为分镜，不能遗漏任何情节！**
-- 每个情节点、每段对话、每个重要动作都需要对应的分镜
-- 一个长故事可能需要 50-100+ 个分镜，这是正常的
+### 1. 完整性与忠实度（最重要！）
+- **必须严格按照剧本顺序，不能遗漏任何情节、对话或动作！**
+- **每一句对话必须生成一个独立的分镜**。
+- **每一个重要的非对话动作（如：转身、拿起杯子、看向窗外）必须生成一个独立的分镜**。
+- 不要为了节省分镜数而合并对话或动作。
+- 如果一段对话很长，请根据语气停顿拆分为多个分镜。
 
-### 2. 分镜原则
-- 每句对话单独成为一个分镜
-- 每个重要动作单独成为一个分镜
-- 场景切换时要有建立镜头
-- 时长通常 3-8 秒
+### 2. 画面描述 (Description) - 一致性的关键
+description 字段是给 AI 绘画模型看的，必须包含：
+- **场景环境**：复用已知场景的关键特征（如“英子家客厅”必须包含“老式沙发、落地窗”等特征，如果已知）。
+- **人物**：明确谁在画面中（使用角色名），以及他们的穿着（如果已知）、姿态、表情。
+- **动作**：正在做什么具体动作。
+- **光线与氛围**：当前时刻的光影效果。
 
-### 3. 画面描述要求
-description 字段是给 AI 生图用的，必须包含：
-- 场景环境（地点、时间、光线、道具）
-- 人物（谁在画面中、姿态、表情）
-- 动作（正在做什么）
-- 氛围（整体感觉）
+**示例**：
+错误："英子在说话"
+正确："英子（穿着校服，扎马尾）坐在老式布艺沙发上，神情焦虑地看着对面，手中紧紧握着一个玻璃杯。背景是昏暗的客厅，窗外透进蓝色的月光。"
 
-### 4. 情绪和语气
+### 3. 情绪和语气
 对于有对话的分镜，必须标注：
 - tone（语气）: 温柔、严肃、愤怒、调侃、疑惑、惊讶、悲伤、兴奋、紧张、平静、讽刺、无奈、坚定、犹豫
 - emotion（情绪）: 开心、难过、愤怒、紧张、平静、惊讶、害怕、期待、失望、满足、焦虑、困惑
 
-### 5. 镜头类型
+### 4. 镜头类型
 根据内容选择合适的镜头：
-- "特写" / "close": 面部特写，表现情绪
-- "中景" / "medium": 半身，展示动作
-- "全景" / "wide": 全身或场景
-- "远景" / "extreme_wide": 大场景
+- "特写" / "close": 面部特写，表现微表情或强调物体细节
+- "中景" / "medium": 半身，展示动作和互动
+- "全景" / "wide": 全身或场景，交代环境和位置关系
+- "远景" / "extreme_wide": 大场景，建立氛围
 
 ## 返回格式（严格 JSON 数组）
 [
@@ -1915,7 +2155,7 @@ description 字段是给 AI 生图用的，必须包含：
     "location": "具体地点",
     "timeOfDay": "时间",
     "props": "道具",
-    "description": "完整的画面描述，用于AI生图",
+    "description": "完整的画面描述（包含场景+人物+动作+表情+光线）",
     "dialogue": "对话内容（如有）",
     "character": "说话角色（如有）",
     "targetCharacter": "对话对象（如有）",
