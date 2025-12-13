@@ -5,7 +5,19 @@ import { createReadStream, statSync, existsSync } from 'fs';
 import { initDatabase } from '../database';
 import { registerIpcHandlers } from '../ipc/handlers';
 import { setMainWindow } from '../services/render.service';
+import { setMainWindow as setAiMainWindow } from '../services/ai.service';
 import { getAllSettings } from '../services/settings.service';
+
+// Windows 控制台 UTF-8 编码设置
+if (process.platform === 'win32') {
+  // 设置控制台输出编码为 UTF-8
+  if (process.stdout && process.stdout.isTTY) {
+    process.stdout.setDefaultEncoding('utf8');
+  }
+  if (process.stderr && process.stderr.isTTY) {
+    process.stderr.setDefaultEncoding('utf8');
+  }
+}
 
 // 环境判断
 const isDev = !app.isPackaged;
@@ -185,6 +197,8 @@ app.whenReady().then(() => {
   if (mainWindow) {
     // 设置主窗口引用到渲染服务
     setMainWindow(mainWindow);
+    // 设置主窗口引用到 AI 服务（用于发送解析进度）
+    setAiMainWindow(mainWindow);
   }
 
   // 注册 IPC 处理器

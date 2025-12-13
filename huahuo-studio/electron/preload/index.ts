@@ -133,6 +133,7 @@ const electronAPI = {
       'export:progress',
       'scene:batch-progress',
       'storyboard:batch-progress',
+      'script:parse-progress', // 新增：剧本解析进度
     ];
 
     if (allowedChannels.includes(channel)) {

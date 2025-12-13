@@ -4,7 +4,7 @@ import { getShot, updateShot } from './shot.service';
 import { getCharacter } from './character.service';
 import { getProject } from './project.service';
 import { saveProjectFile } from './utils';
-import { net } from 'electron';
+import { net, BrowserWindow } from 'electron';
 import {
   applyStyleToImagePrompt,
   applyStyleToVideoPrompt,
@@ -13,6 +13,25 @@ import {
 } from './style.service';
 
 type ProgressCallback = (progress: number) => void;
+
+// 主窗口引用（用于发送进度更新）
+let mainWindow: BrowserWindow | null = null;
+
+/**
+ * 设置主窗口引用
+ */
+export function setMainWindow(window: BrowserWindow) {
+  mainWindow = window;
+}
+
+/**
+ * 发送解析进度到前端
+ */
+function sendParseProgress(stage: string, progress: number, message: string) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('script:parse-progress', { stage, progress, message });
+  }
+}
 
 /**
  * 解析 API 错误并返回友好的中文提示
@@ -403,6 +422,7 @@ async function callOpenAICompatText(
 /**
  * 生成分镜图像
  * 使用完整的场景信息、角色参考图和项目风格
+ * 支持多角色
  */
 export async function generateShotImage(
   shotId: string,
@@ -421,11 +441,9 @@ export async function generateShotImage(
   let prompt = '';
 
   // 1. 场景环境信息
-  let sceneDescription = '';
   if (shot.sceneId) {
     const scene = await getScene(shot.sceneId);
     if (scene && scene.description) {
-      sceneDescription = scene.description;
       prompt += `场景描述: ${scene.description}\n`;
     }
   }
@@ -451,24 +469,56 @@ export async function generateShotImage(
     prompt += `\n动作: ${shot.action}`;
   }
 
-  // 5. 角色信息和外貌（应用风格）
-  let characterAvatarPath: string | null = null;
-  if (shot.characterId) {
-    const character = await getCharacter(shot.characterId);
-    if (character) {
-      if (character.appearance) {
-        // 应用风格到角色描述
-        const styledAppearance = applyStyleToCharacterDescription(character.appearance, styleId);
-        prompt += `\n\n角色【${character.name}】: ${styledAppearance}`;
-      }
-      // 获取角色头像作为参考图
-      if (character.avatarPath) {
-        characterAvatarPath = character.avatarPath;
-      } else if (character.generatedAvatars && character.generatedAvatars.length > 0) {
-        characterAvatarPath = character.generatedAvatars[0];
+  // 5. 角色信息和外貌（应用风格）- 支持多角色
+  const characterReferences: Array<{ name: string; avatarPath: string }> = [];
+
+  // 优先使用 characterIds（多角色），回退到 characterId（单角色兼容）
+  const characterIds = shot.characterIds ||
+    (shot.characterId ? [shot.characterId] : []);
+
+  console.log('[AI Service] ========== 角色参考图调试 ==========');
+  console.log('[AI Service] shot.characterIds:', shot.characterIds);
+  console.log('[AI Service] shot.characterId:', shot.characterId);
+  console.log('[AI Service] 最终使用的角色IDs:', characterIds);
+
+  if (characterIds.length > 0) {
+    for (const charId of characterIds) {
+      const character = await getCharacter(charId);
+      console.log(`[AI Service] 查询角色 ${charId}:`, character ? {
+        name: character.name,
+        avatarPath: character.avatarPath,
+        generatedAvatarsCount: character.generatedAvatars?.length || 0
+      } : '未找到');
+
+      if (character) {
+        if (character.appearance) {
+          // 应用风格到角色描述
+          const styledAppearance = applyStyleToCharacterDescription(character.appearance, styleId);
+          prompt += `\n\n角色【${character.name}】: ${styledAppearance}`;
+        }
+        // 收集角色头像作为参考图（包含角色名）
+        let avatarPath: string | null = null;
+        if (character.avatarPath) {
+          avatarPath = character.avatarPath;
+          console.log(`[AI Service] ✓ 添加角色【${character.name}】的头像: ${character.avatarPath}`);
+        } else if (character.generatedAvatars && character.generatedAvatars.length > 0) {
+          // generatedAvatars 已经是数组，无需 JSON.parse
+          avatarPath = character.generatedAvatars[0];
+          console.log(`[AI Service] ✓ 添加角色【${character.name}】的生成头像: ${character.generatedAvatars[0]}`);
+        } else {
+          console.log(`[AI Service] ✗ 角色【${character.name}】没有任何头像`);
+        }
+
+        if (avatarPath) {
+          characterReferences.push({ name: character.name, avatarPath });
+        }
       }
     }
   }
+
+  console.log('[AI Service] 最终收集到的参考图数量:', characterReferences.length);
+  console.log('[AI Service] 参考角色列表:', characterReferences.map(r => `${r.name}: ${r.avatarPath}`));
+  console.log('[AI Service] ==========================================');
 
   // 6. 镜头和情绪信息
   if (shot.cameraType) {
@@ -487,9 +537,9 @@ export async function generateShotImage(
   const config = await getImageApiConfig();
   let imageBuffer: Buffer;
 
-  // 如果是阿里云且有角色参考图，使用图片编辑模型
-  if (config.provider === 'aliyun' && characterAvatarPath) {
-    imageBuffer = await generateImageWithReference(styledPrompt, characterAvatarPath, styleId);
+  // 如果是阿里云且有角色参考图，使用图片编辑模型（支持多张参考图）
+  if (config.provider === 'aliyun' && characterReferences.length > 0) {
+    imageBuffer = await generateImageWithMultipleReferences(styledPrompt, characterReferences, styleId);
   } else {
     imageBuffer = await generateImage(styledPrompt, styleId);
   }
@@ -975,13 +1025,16 @@ async function callAliyunImageEdit(
 }
 
 /**
- * 使用参考图生成图像（阿里云 qwen-image-edit-plus）
- * 用于分镜生成时，将角色参考图融入画面
- * @param prompt 提示词（已应用风格）
- * @param referenceImagePath 参考图路径
+ * 使用多张参考图生成图像（支持多角色）
+ * @param prompt 提示词
+ * @param characterReferences 角色参考信息数组，包含名字和图片路径
  * @param styleId 风格ID
  */
-async function generateImageWithReference(prompt: string, referenceImagePath: string, styleId?: string): Promise<Buffer> {
+async function generateImageWithMultipleReferences(
+  prompt: string,
+  characterReferences: Array<{ name: string; avatarPath: string }>,
+  styleId?: string
+): Promise<Buffer> {
   const config = await getImageApiConfig();
 
   if (config.provider !== 'aliyun') {
@@ -989,29 +1042,42 @@ async function generateImageWithReference(prompt: string, referenceImagePath: st
     return await generateImage(prompt, styleId);
   }
 
-  // 读取参考图片并转为 Base64
   const fs = await import('fs');
   const path = await import('path');
 
-  if (!fs.existsSync(referenceImagePath)) {
-    console.warn('[AI Service] 参考图不存在，回退到普通生成:', referenceImagePath);
-    return await generateImage(prompt, styleId);
+  // 准备所有参考图的 Base64 数据
+  const imageContents: Array<{ image: string }> = [];
+  const validReferences: Array<{ name: string; path: string }> = [];
+
+  for (const ref of characterReferences) {
+    if (!fs.existsSync(ref.avatarPath)) {
+      console.warn('[AI Service] 参考图不存在，跳过:', ref.name, ref.avatarPath);
+      continue;
+    }
+
+    const imageBuffer = fs.readFileSync(ref.avatarPath);
+    const ext = path.extname(ref.avatarPath).toLowerCase();
+
+    const mimeTypes: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.bmp': 'image/bmp',
+      '.tiff': 'image/tiff',
+      '.webp': 'image/webp',
+    };
+    const mimeType = mimeTypes[ext] || 'image/png';
+    const base64Image = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+
+    imageContents.push({ image: base64Image });
+    validReferences.push({ name: ref.name, path: ref.avatarPath });
   }
 
-  const imageBuffer = fs.readFileSync(referenceImagePath);
-  const ext = path.extname(referenceImagePath).toLowerCase();
-
-  // 获取 MIME 类型
-  const mimeTypes: Record<string, string> = {
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.bmp': 'image/bmp',
-    '.tiff': 'image/tiff',
-    '.webp': 'image/webp',
-  };
-  const mimeType = mimeTypes[ext] || 'image/png';
-  const base64Image = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+  // 如果没有有效的参考图，回退到普通生成
+  if (imageContents.length === 0) {
+    console.warn('[AI Service] 没有有效的参考图，回退到普通生成');
+    return await generateImage(prompt, styleId);
+  }
 
   // 转换宽高比为阿里云支持的尺寸
   const aspectRatio = config.imageAspectRatio || '16:9';
@@ -1026,17 +1092,43 @@ async function generateImageWithReference(prompt: string, referenceImagePath: st
 
   const url = `${config.baseUrl}/services/aigc/multimodal-generation/generation`;
 
-  console.log('[AI Service] 阿里云参考图编辑请求:', url);
+  console.log('[AI Service] 阿里云多参考图编辑请求:', url);
   console.log('[AI Service] 使用模型: qwen-image-edit-plus');
-  console.log('[AI Service] 参考图:', referenceImagePath);
+  console.log('[AI Service] 参考图数量:', imageContents.length);
+  console.log('[AI Service] 参考角色:', validReferences.map(r => r.name).join(', '));
   console.log('[AI Service] 风格:', styleId);
 
-  // 提示词已包含风格信息，这里只添加参考图指引
-  const enhancedPrompt = `参考图1中的人物形象，生成以下场景：
+  // 构建更明确的提示词，指明每个参考图对应的角色
+  let refDescription = '';
+  if (validReferences.length === 1) {
+    refDescription = `参考图1中的角色是【${validReferences[0].name}】`;
+  } else {
+    const refParts = validReferences.map((ref, i) =>
+      `参考图${i + 1}中的角色是【${ref.name}】`
+    );
+    refDescription = refParts.join('，');
+  }
+
+  // 构建增强的提示词，更明确地要求包含所有角色
+  const characterNames = validReferences.map(r => `【${r.name}】`).join('和');
+  const enhancedPrompt = `${refDescription}。
+
+请根据以下场景描述生成图像，画面中必须同时出现${characterNames}：
 
 ${prompt}
 
-保持参考图1中人物的外貌特征和风格一致性。`;
+重要要求：
+1. 每个角色的外貌必须严格按照对应参考图中的形象
+2. 所有角色（${validReferences.map(r => r.name).join('、')}）都必须出现在生成的画面中
+3. 保持各角色的外貌特征、发型、服装等与参考图一致`;
+
+  console.log('[AI Service] 增强提示词长度:', enhancedPrompt.length);
+
+  // 构建 content 数组：先放所有图片，最后放文本
+  const contentArray: Array<{ image: string } | { text: string }> = [
+    ...imageContents,
+    { text: enhancedPrompt }
+  ];
 
   let response: { ok: boolean; status: number; text: () => Promise<string>; json: () => Promise<any> };
   try {
@@ -1052,10 +1144,7 @@ ${prompt}
           messages: [
             {
               role: 'user',
-              content: [
-                { image: base64Image },
-                { text: enhancedPrompt }
-              ]
+              content: contentArray
             }
           ]
         },
@@ -1070,29 +1159,29 @@ ${prompt}
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误';
-    console.error('[AI Service] 阿里云参考图编辑请求失败:', message);
-    throw new Error(`阿里云参考图编辑请求失败: ${message}`);
+    console.error('[AI Service] 阿里云多参考图编辑请求失败:', message);
+    throw new Error(`阿里云多参考图编辑请求失败: ${message}`);
   }
 
   if (!response.ok) {
     const error = await response.text();
-    console.error('[AI Service] 阿里云参考图编辑错误响应:', error);
-    throw new Error(parseApiError(`阿里云参考图编辑错误: ${response.status} - ${error}`));
+    console.error('[AI Service] 阿里云多参考图编辑错误响应:', error);
+    throw new Error(parseApiError(`阿里云多参考图编辑错误: ${response.status} - ${error}`));
   }
 
   const data = await response.json();
-  console.log('[AI Service] 阿里云参考图编辑响应:', JSON.stringify(data).substring(0, 500));
+  console.log('[AI Service] 阿里云多参考图编辑响应:', JSON.stringify(data).substring(0, 500));
 
   // 响应格式: output.choices[0].message.content[0].image
   const imageUrl = data.output?.choices?.[0]?.message?.content?.[0]?.image;
   if (!imageUrl) {
-    console.error('[AI Service] 阿里云参考图编辑响应解析失败:', JSON.stringify(data));
-    throw new Error('阿里云参考图编辑失败: 未获取到图像URL');
+    console.error('[AI Service] 阿里云多参考图编辑响应解析失败:', JSON.stringify(data));
+    throw new Error('阿里云多参考图编辑失败: 未获取到图像URL');
   }
 
   console.log('[AI Service] 阿里云生成图像URL:', imageUrl);
 
-  // 下载图像 - 使用带重试的下载函数
+  // 下载图像
   return await downloadImageWithRetry(imageUrl);
 }
 
@@ -1911,6 +2000,7 @@ export interface EnhancedShot {
   dialogue?: string;             // 对话内容
   character?: string;            // 说话角色
   targetCharacter?: string;      // 对话对象（对谁说）
+  characters?: string[];         // 画面中所有角色（新增）
   tone?: string;                 // 说话语气（温柔、愤怒、疑惑、调侃、严肃等）
   emotion?: string;              // 角色情绪（开心、难过、紧张、愤怒、平静等）
   action?: string;               // 动作描述
@@ -1925,6 +2015,9 @@ export interface EnhancedShot {
  */
 export async function parseScriptPhase1(content: string): Promise<Phase1Result> {
   console.log(`[AI Service] 第一阶段解析开始，文本长度: ${content.length} 字符`);
+
+  // 发送进度更新 - 开始第一阶段
+  sendParseProgress('phase1_start', 10, '正在分析剧本结构...');
 
   const systemPrompt = `你是一个专业的影视剧本分析师。你的任务是分析用户提供的文本，进行结构化提取。
 
@@ -1950,15 +2043,21 @@ export async function parseScriptPhase1(content: string): Promise<Phase1Result> 
 - **background**: 背景故事（如：美术专业出身、被女友抛弃、家境贫寒等）
 - **relationships**: 与其他角色的关系（如：王力的领导、领导的小舅子等）
 
-### 2. 场景识别
-识别所有独立的场景/地点，每个场景需要：
+### 2. 场景识别（重要！按主要地点合并）
+识别所有独立的**主要地点**，注意：
+- **场景是指一个主要地点/建筑/区域**，如"伍叙住所"、"公园"、"咖啡厅"、"学校"
+- **同一地点的不同房间应该合并为一个场景**：例如"伍叙住所厨房"、"伍叙住所卧室"、"伍叙住所客厅"都属于"伍叙住所"这一个场景
+- **不同时间（日/夜）的同一地点也是同一个场景**：例如"伍叙住所 日"和"伍叙住所 夜"是同一个场景
+- 场景的description应该描述这个地点的整体环境，而不是某个特定房间
+
+每个场景需要：
 - **id**: 场景唯一ID，如 "scene_1"
-- **name**: 场景名称
-- **sceneInfo**: 场景行（如有）
-- **location**: 具体地点
-- **timeOfDay**: 时间（白天/夜晚/黄昏等）
-- **interior**: 是否内景
-- **description**: 详细环境描述（200-300字），用于生成场景参考图
+- **name**: 主要地点名称（如"伍叙住所"、"城市公园"，不要包含具体房间）
+- **sceneInfo**: 代表性的场景行（如"伍叙住所 内"）
+- **location**: 主要地点描述
+- **timeOfDay**: 主要出现的时间段
+- **interior**: 是否主要是内景
+- **description**: 整体环境描述（200-300字），描述这个地点的整体风格和氛围
 - **props**: 场景道具
 - **lighting**: 光线描述
 - **atmosphere**: 氛围描述
@@ -1990,12 +2089,12 @@ export async function parseScriptPhase1(content: string): Promise<Phase1Result> 
   "sceneLocations": [
     {
       "id": "scene_1",
-      "name": "场景名称",
-      "sceneInfo": "完整场景行",
-      "location": "具体地点",
-      "timeOfDay": "时间",
+      "name": "主要地点名称（如'伍叙住所'，不含具体房间）",
+      "sceneInfo": "代表性场景行（如'伍叙住所 内'）",
+      "location": "地点描述",
+      "timeOfDay": "主要时间段",
       "interior": true,
-      "description": "详细的场景环境描述（200-300字）",
+      "description": "整体环境描述（200-300字），描述地点的整体风格",
       "props": "场景道具",
       "lighting": "光线描述",
       "atmosphere": "氛围描述"
@@ -2022,7 +2121,13 @@ ${content}
 
 请严格按照 JSON 格式返回分析结果。`;
 
+  // 发送进度更新 - 调用 AI
+  sendParseProgress('phase1_calling_ai', 30, '正在调用 AI 分析角色和场景...');
+
   const response = await generateText(prompt, systemPrompt);
+
+  // 发送进度更新 - 解析结果
+  sendParseProgress('phase1_parsing', 70, '正在解析分析结果...');
 
   // 解析 JSON
   try {
@@ -2070,6 +2175,9 @@ ${content}
         },
       };
 
+      // 发送进度更新 - 第一阶段完成
+      sendParseProgress('phase1_complete', 100, `第一阶段完成：${phase1Result.characters.length} 个角色，${phase1Result.sceneLocations.length} 个场景`);
+
       console.log(`[AI Service] 第一阶段解析完成: ${phase1Result.characters.length} 个角色, ${phase1Result.sceneLocations.length} 个场景`);
       return phase1Result;
     }
@@ -2089,6 +2197,9 @@ export async function parseScriptPhase2(
   phase1Result: Phase1Result
 ): Promise<EnhancedShot[]> {
   console.log(`[AI Service] 第二阶段解析开始，基于 ${phase1Result.characters.length} 个角色和 ${phase1Result.sceneLocations.length} 个场景`);
+
+  // 发送进度更新 - 开始第二阶段
+  sendParseProgress('phase2_start', 10, '正在准备生成分镜...');
 
   // 构建角色和场景上下文
   const charactersContext = phase1Result.characters.map(c =>
@@ -2157,8 +2268,9 @@ description 字段是给 AI 绘画模型看的，必须包含：
     "props": "道具",
     "description": "完整的画面描述（包含场景+人物+动作+表情+光线）",
     "dialogue": "对话内容（如有）",
-    "character": "说话角色（如有）",
-    "targetCharacter": "对话对象（如有）",
+    "character": "说话角色（如有对话）",
+    "targetCharacter": "对话对象（如有对话）",
+    "characters": ["角色1", "角色2"],
     "tone": "语气（如有对话）",
     "emotion": "情绪",
     "action": "动作描述",
@@ -2166,7 +2278,12 @@ description 字段是给 AI 绘画模型看的，必须包含：
     "mood": "画面氛围",
     "duration": 5
   }
-]`;
+]
+
+**特别注意 characters 字段**：
+- characters 是一个数组，必须列出当前画面中出现的所有角色（按照重要性排序）
+- 即使没有对话，也要列出画面中出现的所有角色
+- 角色名必须与已知角色列表中的名称完全一致`;
 
   const prompt = `请将以下内容转换为详细的分镜列表。
 
@@ -2180,7 +2297,13 @@ ${content}
 
 请返回 JSON 数组格式的分镜列表。`;
 
+  // 发送进度更新 - 调用 AI 生成分镜
+  sendParseProgress('phase2_calling_ai', 30, '正在调用 AI 生成分镜...');
+
   const response = await generateText(prompt, systemPrompt);
+
+  // 发送进度更新 - 解析分镜结果
+  sendParseProgress('phase2_parsing', 70, '正在解析分镜结果...');
 
   // 解析 JSON
   try {
@@ -2236,6 +2359,7 @@ ${content}
           dialogue: shot.dialogue || undefined,
           character: shot.character || undefined,
           targetCharacter: shot.targetCharacter || undefined,
+          characters: Array.isArray(shot.characters) ? shot.characters : undefined, // 新增：画面中所有角色
           tone: shot.tone || undefined,
           emotion: shot.emotion || undefined,
           action: shot.action || undefined,
@@ -2244,6 +2368,9 @@ ${content}
           duration: shot.duration || 5,
         };
       });
+
+      // 发送进度更新 - 第二阶段完成
+      sendParseProgress('phase2_complete', 100, `分镜生成完成：${enhancedShots.length} 个分镜`);
 
       console.log(`[AI Service] 第二阶段解析完成: ${enhancedShots.length} 个分镜`);
       return enhancedShots;
@@ -2341,6 +2468,9 @@ async function parseScriptInBatches(content: string, batchSize: number): Promise
 
   console.log(`[AI Service] 剧本分为 ${batches.length} 批处理`);
 
+  // 发送进度更新 - 开始批量处理
+  sendParseProgress('batch_start', 0, `剧本较长，将分 ${batches.length} 批处理...`);
+
   // 合并结果
   const allSceneLocations: SceneLocation[] = [];
   const allShots: EnhancedShot[] = [];
@@ -2394,6 +2524,9 @@ async function parseScriptInBatches(content: string, batchSize: number): Promise
     }
   }
 
+  // 发送进度更新 - 全部批次处理完成
+  sendParseProgress('completed', 100, `解析完成：${allSceneLocations.length} 个场景，${allShots.length} 个分镜，${allCharacters.size} 个角色`);
+
   return {
     sceneLocations: allSceneLocations,
     scenes: allShots,
@@ -2418,6 +2551,15 @@ async function parseScriptSingle(content: string, batchIndex?: number, totalBatc
   }>;
 }> {
   const batchInfo = batchIndex ? `（第${batchIndex}/${totalBatches}批）` : '';
+  const isBatchMode = batchIndex !== undefined && totalBatches !== undefined;
+
+  // 发送进度更新
+  if (isBatchMode) {
+    const batchProgress = Math.round(((batchIndex! - 1) / totalBatches!) * 100);
+    sendParseProgress('analyzing', batchProgress, `正在分析第 ${batchIndex}/${totalBatches} 批内容...`);
+  } else {
+    sendParseProgress('analyzing', 10, '正在分析剧本内容...');
+  }
 
   const systemPrompt = `你是一个专业的影视剧本分析师和分镜师。请仔细分析用户提供的剧本内容${batchInfo}，将其拆解为可用于视频制作的分镜。
 
@@ -2425,27 +2567,27 @@ async function parseScriptSingle(content: string, batchIndex?: number, totalBatc
 
 ## 分析要求
 
-### 1. 场景识别与管理（极其重要！）
-首先识别剧本中的所有独立场景。每个场景应该有：
+### 1. 场景识别与管理（极其重要！按主要地点合并）
+首先识别剧本中所有独立的**主要地点/建筑/区域**：
+- **场景是指一个主要地点**，如"伍叙住所"、"公园"、"咖啡厅"、"学校"
+- **同一地点的不同房间应该合并为一个场景**：例如"伍叙家厨房"、"伍叙家卧室"、"伍叙家客厅"都属于"伍叙家"这一个场景
+- **不同时间（日/夜）的同一地点也是同一个场景**
 - 场景行格式通常为："地点 时间 内/外"
-- 同一个场景可能在剧本中多次出现
-- 每个独立场景需要生成场景参考图，所以描述要详细
 
-你需要为每个场景提供：
+你需要为每个**主要地点**提供：
 - id: 场景唯一标识，如 "scene_1"
-- name: 场景名称，如 "英子家客厅"
-- sceneInfo: 完整的场景行
-- location: 具体地点
-- timeOfDay: 时间（白天/夜晚/黄昏/清晨等）
-- interior: 是否内景（true/false）
-- description: **详细的场景环境描述**（200-300字），包括：
-  * 空间布局（房间大小、格局）
-  * 主要家具和摆设
-  * 墙面、地板材质和颜色
+- name: **主要地点名称**（如"伍叙住所"、"城市公园"，不要包含具体房间名）
+- sceneInfo: 代表性的场景行（如"伍叙住所 内"）
+- location: 主要地点描述
+- timeOfDay: 主要出现的时间段
+- interior: 是否主要是内景（true/false）
+- description: **整体环境描述**（200-300字），描述这个地点的整体风格和氛围：
+  * 空间布局（整体格局）
+  * 主要家具和摆设风格
   * 装饰风格（现代/古典/简约等）
-  * 窗户位置和窗外景色
+  * 整体色调和材质
 - props: 场景中的重要道具
-- lighting: 光线描述（如"温暖的台灯光"、"明亮的日光"）
+- lighting: 典型光线描述
 - atmosphere: 整体氛围（如"温馨家庭氛围"、"紧张压抑"）
 
 ### 2. 分镜拆分原则
@@ -2511,12 +2653,12 @@ async function parseScriptSingle(content: string, batchIndex?: number, totalBatc
   "sceneLocations": [
     {
       "id": "scene_1",
-      "name": "场景名称",
-      "sceneInfo": "完整场景行",
-      "location": "具体地点",
-      "timeOfDay": "时间",
+      "name": "主要地点名称（如'伍叙住所'，不含具体房间）",
+      "sceneInfo": "代表性场景行（如'伍叙住所 内'）",
+      "location": "地点描述",
+      "timeOfDay": "主要时间段",
       "interior": true,
-      "description": "详细的场景环境描述（200-300字），用于生成场景参考图",
+      "description": "整体环境描述（200-300字），描述这个地点的整体风格",
       "props": "场景道具",
       "lighting": "光线描述",
       "atmosphere": "氛围描述"
@@ -2525,9 +2667,9 @@ async function parseScriptSingle(content: string, batchIndex?: number, totalBatc
   "shots": [
     {
       "sceneId": "scene_1",
-      "sceneInfo": "场景信息",
-      "location": "具体地点",
-      "timeOfDay": "时间段",
+      "sceneInfo": "具体场景行（如'伍叙住所 厨房 夜 内'）",
+      "location": "具体位置",
+      "timeOfDay": "具体时间段",
       "props": "场景道具",
       "description": "画面描述（完整的AI生图提示词，包含场景+人物+动作+表情+光线）",
       "dialogue": "对话内容（如有）",
@@ -2572,7 +2714,21 @@ ${content}
 
 请严格按照 JSON 格式返回分析结果，确保包含 sceneLocations、shots、characters 三个数组。`;
 
+  // 发送进度更新 - 开始调用 AI
+  if (isBatchMode) {
+    sendParseProgress('calling_ai', Math.round(((batchIndex! - 0.5) / totalBatches!) * 100), `正在调用 AI 分析第 ${batchIndex}/${totalBatches} 批...`);
+  } else {
+    sendParseProgress('calling_ai', 30, '正在调用 AI 分析剧本...');
+  }
+
   const response = await generateText(prompt, systemPrompt);
+
+  // 发送进度更新 - AI 返回，开始解析
+  if (isBatchMode) {
+    sendParseProgress('parsing', Math.round((batchIndex! / totalBatches!) * 100), `正在解析第 ${batchIndex}/${totalBatches} 批结果...`);
+  } else {
+    sendParseProgress('parsing', 70, '正在解析 AI 返回结果...');
+  }
 
   // 解析 JSON
   try {
@@ -2653,6 +2809,11 @@ ${content}
           estimatedAge: char.estimatedAge || null,
         };
       });
+
+      // 发送进度更新 - 解析完成
+      if (!isBatchMode) {
+        sendParseProgress('completed', 100, `解析完成：${sceneLocations.length} 个场景，${scenes.length} 个分镜，${characters.length} 个角色`);
+      }
 
       return {
         sceneLocations: sceneLocations.length > 0 ? sceneLocations : undefined,
@@ -2773,7 +2934,20 @@ export async function editSceneImage(
   } else {
     // 暂时不支持的服务商，回退到重新生成
     console.warn('[AI Service] 该服务商暂不支持图片编辑，回退到重新生成');
-    return await generateSceneImage(scene.projectId, scene, styleId, onProgress);
+    // 将 SceneData 转换为 SceneLocation 格式
+    const sceneLocation: SceneLocation = {
+      id: scene.id,
+      name: scene.name || '',
+      sceneInfo: scene.sceneInfo || '',
+      location: scene.location || '',
+      timeOfDay: scene.timeOfDay || '',
+      interior: scene.interior,
+      description: scene.description || '',
+      props: scene.props || '',
+      lighting: scene.lighting || '',
+      atmosphere: scene.atmosphere || '',
+    };
+    return await generateSceneImage(scene.projectId, sceneLocation, styleId, onProgress);
   }
 
   onProgress?.(80);

@@ -14,7 +14,8 @@ export interface ShotData {
   index: number;
   description: string;
   dialogue: string | null;
-  characterId: string | null;
+  characterId: string | null; // 向后兼容：单角色
+  characterIds: string[] | null; // 新增：多角色ID数组
   duration: number;
   cameraType: string | null;
   mood: string | null;
@@ -31,6 +32,19 @@ export interface ShotData {
 }
 
 /**
+ * 解析 characterIds JSON 字符串为数组
+ */
+function parseCharacterIds(characterIdsJson: string | null): string[] | null {
+  if (!characterIdsJson) return null;
+  try {
+    const parsed = JSON.parse(characterIdsJson);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 获取项目所有分镜
  */
 export async function getShots(projectId: string): Promise<ShotData[]> {
@@ -44,6 +58,7 @@ export async function getShots(projectId: string): Promise<ShotData[]> {
 
   return result.map((shot: any) => ({
     ...shot,
+    characterIds: parseCharacterIds(shot.characterIds),
     status: shot.status as ShotStatus,
   }));
 }
@@ -57,8 +72,17 @@ export async function getShot(id: string): Promise<ShotData | null> {
 
   if (!shot) return null;
 
+  const parsedCharacterIds = parseCharacterIds(shot.characterIds);
+  console.log('[Shot Service] getShot - 读取分镜:', {
+    shotId: id,
+    数据库中characterIds: shot.characterIds,
+    解析后characterIds: parsedCharacterIds,
+    characterId: shot.characterId,
+  });
+
   return {
     ...shot,
+    characterIds: parsedCharacterIds,
     status: shot.status as ShotStatus,
   };
 }
@@ -72,6 +96,8 @@ export async function createShot(data: {
   description: string;
   dialogue?: string;
   characterId?: string;
+  characterIds?: string[]; // 新增：多角色ID数组
+  sceneId?: string; // 关联场景ID
   duration?: number;
   cameraType?: string;
   mood?: string;
@@ -88,10 +114,12 @@ export async function createShot(data: {
   await db.insert(shots).values({
     id,
     projectId: data.projectId,
+    sceneId: data.sceneId || null,
     index: data.index,
     description: data.description,
     dialogue: data.dialogue || null,
     characterId: data.characterId || null,
+    characterIds: data.characterIds ? JSON.stringify(data.characterIds) : null,
     duration: data.duration || 3,
     cameraType: data.cameraType || null,
     mood: data.mood || null,
@@ -119,6 +147,7 @@ export async function createShots(
     description: string;
     dialogue?: string;
     characterId?: string;
+    characterIds?: string[]; // 新增：多角色ID数组
     duration?: number;
     cameraType?: string;
     mood?: string;
@@ -177,6 +206,7 @@ export async function createShots(
       description: data.description || '',
       dialogue: data.dialogue || null,
       characterId: data.characterId || null,
+      characterIds: data.characterIds ? JSON.stringify(data.characterIds) : null,
       duration: data.duration || 3,
       cameraType: data.cameraType || null,
       mood: data.mood || null,
@@ -215,6 +245,7 @@ export async function updateShot(
     description: string;
     dialogue: string;
     characterId: string;
+    characterIds: string[]; // 新增：多角色ID数组
     sceneId: string;
     duration: number;
     cameraType: string;
@@ -234,14 +265,26 @@ export async function updateShot(
 
   if (!shot) return;
 
+  // 处理 characterIds：如果提供了数组，转换为 JSON 字符串
+  const updateData: Record<string, any> = { ...data };
+  if (data.characterIds !== undefined) {
+    updateData.characterIds = data.characterIds ? JSON.stringify(data.characterIds) : null;
+    console.log('[Shot Service] updateShot - 保存 characterIds:', {
+      原始数据: data.characterIds,
+      JSON转换后: updateData.characterIds,
+      shotId: id,
+    });
+  }
+
   await db
     .update(shots)
     .set({
-      ...data,
+      ...updateData,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(shots.id, id));
 
+  console.log('[Shot Service] updateShot - 保存完成:', id);
   await touchProject(shot.projectId);
 }
 

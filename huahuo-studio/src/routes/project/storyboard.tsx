@@ -24,7 +24,8 @@ interface Shot {
   index: number;
   description: string;
   dialogue: string | null;
-  characterId: string | null;
+  characterId: string | null; // 向后兼容：单角色
+  characterIds: string[] | null; // 新增：多角色ID数组
   duration: number;
   cameraType: string | null;
   mood: string | null;
@@ -101,13 +102,13 @@ function ShotCard({
   shot,
   isSelected,
   onClick,
-  characterName,
+  characterNames,
   sceneName,
 }: {
   shot: Shot;
   isSelected: boolean;
   onClick: () => void;
-  characterName?: string;
+  characterNames?: string[]; // 改为数组，支持多角色
   sceneName?: string;
 }) {
   const imageUrl = getLocalFileUrl(shot.imagePath);
@@ -140,7 +141,16 @@ function ShotCard({
       <div className="p-2">
         <div className="flex items-center justify-between mb-1">
           <span className="font-pixel text-xs text-text-muted">#{shot.index}</span>
-          {characterName && <PixelBadge variant="primary" size="sm">{characterName}</PixelBadge>}
+          {characterNames && characterNames.length > 0 && (
+            <div className="flex gap-0.5 flex-wrap justify-end">
+              {characterNames.slice(0, 2).map((name, i) => (
+                <PixelBadge key={i} variant="primary" size="sm">{name}</PixelBadge>
+              ))}
+              {characterNames.length > 2 && (
+                <PixelBadge variant="default" size="sm">+{characterNames.length - 2}</PixelBadge>
+              )}
+            </div>
+          )}
         </div>
         {sceneName && (
           <div className="text-[10px] text-text-muted truncate mb-0.5">{sceneName}</div>
@@ -165,7 +175,7 @@ export default function ProjectStoryboardPage() {
   const [editForm, setEditForm] = useState({
     description: '',
     dialogue: '',
-    characterId: '',
+    characterIds: [] as string[], // 改为数组，支持多角色
     sceneId: '',
     duration: 3,
     cameraType: '',
@@ -240,10 +250,13 @@ export default function ProjectStoryboardPage() {
   // 当选中分镜改变时，更新表单
   useEffect(() => {
     if (selectedShot) {
+      // 优先使用 characterIds，如果不存在则回退到 characterId（向后兼容）
+      const charIds = selectedShot.characterIds ||
+        (selectedShot.characterId ? [selectedShot.characterId] : []);
       setEditForm({
         description: selectedShot.description,
         dialogue: selectedShot.dialogue || '',
-        characterId: selectedShot.characterId || '',
+        characterIds: charIds,
         sceneId: selectedShot.sceneId || '',
         duration: selectedShot.duration,
         cameraType: selectedShot.cameraType || '',
@@ -252,11 +265,12 @@ export default function ProjectStoryboardPage() {
     }
   }, [selectedShot]);
 
-  // 获取角色名
-  const getCharacterName = (characterId: string | null) => {
-    if (!characterId) return undefined;
-    const char = characters.find((c) => c.id === characterId);
-    return char?.name;
+  // 获取多个角色名
+  const getCharacterNames = (shot: Shot): string[] => {
+    const ids = shot.characterIds || (shot.characterId ? [shot.characterId] : []);
+    return ids
+      .map(id => characters.find(c => c.id === id)?.name)
+      .filter((name): name is string => !!name);
   };
 
   // 获取场景名
@@ -297,7 +311,7 @@ export default function ProjectStoryboardPage() {
       await window.electron.invoke('storyboard:update', selectedId, {
         description: editForm.description,
         dialogue: editForm.dialogue || null,
-        characterId: editForm.characterId || null,
+        characterIds: editForm.characterIds.length > 0 ? editForm.characterIds : null, // 改为多角色
         sceneId: editForm.sceneId || null,
         duration: editForm.duration,
         cameraType: editForm.cameraType || null,
@@ -813,19 +827,44 @@ export default function ProjectStoryboardPage() {
               )}
 
               <div>
-                <label className="block text-xs font-pixel text-text-secondary mb-1">角色</label>
-                <select
-                  value={editForm.characterId}
-                  onChange={(e) => setEditForm({ ...editForm, characterId: e.target.value })}
-                  className="w-full px-3 py-2 bg-bg-tertiary border-2 border-black text-sm focus:outline-none focus:border-primary-main"
-                >
-                  <option value="">无角色</option>
-                  {characters.map((char) => (
-                    <option key={char.id} value={char.id}>
-                      {char.name}
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-xs font-pixel text-text-secondary mb-1">
+                  角色 {editForm.characterIds.length > 0 && `(${editForm.characterIds.length})`}
+                </label>
+                <div className="max-h-32 overflow-y-auto bg-bg-tertiary border-2 border-black p-2 space-y-1">
+                  {characters.length === 0 ? (
+                    <p className="text-xs text-text-muted">暂无角色</p>
+                  ) : (
+                    characters.map((char) => (
+                      <label
+                        key={char.id}
+                        className="flex items-center gap-2 cursor-pointer hover:bg-bg-secondary px-1 py-0.5"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={editForm.characterIds.includes(char.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setEditForm({
+                                ...editForm,
+                                characterIds: [...editForm.characterIds, char.id],
+                              });
+                            } else {
+                              setEditForm({
+                                ...editForm,
+                                characterIds: editForm.characterIds.filter((id) => id !== char.id),
+                              });
+                            }
+                          }}
+                          className="w-3 h-3 accent-primary-main"
+                        />
+                        <span className="text-sm text-text-primary">{char.name}</span>
+                        <span className="text-xs text-text-muted">
+                          ({char.role === 'protagonist' ? '主角' : char.role === 'antagonist' ? '反派' : '配角'})
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </div>
               </div>
 
               <PixelTextarea
@@ -947,7 +986,7 @@ export default function ProjectStoryboardPage() {
                 shot={shot}
                 isSelected={selectedId === shot.id}
                 onClick={() => setSelectedId(shot.id)}
-                characterName={getCharacterName(shot.characterId)}
+                characterNames={getCharacterNames(shot)}
                 sceneName={getSceneName(shot.sceneId) || undefined}
               />
             ))}

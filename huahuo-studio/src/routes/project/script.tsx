@@ -66,6 +66,7 @@ interface EnhancedShot {
   dialogue?: string;
   character?: string;
   targetCharacter?: string;
+  characters?: string[]; // 新增：画面中所有角色
   tone?: string;
   emotion?: string;
   action?: string;
@@ -76,6 +77,13 @@ interface EnhancedShot {
 
 // 解析阶段状态
 type ParseStage = 'idle' | 'phase1' | 'confirm' | 'phase2' | 'complete';
+
+// 解析进度状态
+interface ParseProgress {
+  stage: string;
+  progress: number;
+  message: string;
+}
 
 // 编辑角色Modal
 function EditCharacterModal({
@@ -406,6 +414,12 @@ export default function ProjectScriptPage() {
   // 消息状态
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
+  // 解析进度状态
+  const [parseProgress, setParseProgress] = useState<ParseProgress | null>(null);
+
+  // 保存进度状态（用于显示创建角色、场景、分镜的进度）
+  const [saveProgress, setSaveProgress] = useState<{ current: number; total: number; message: string } | null>(null);
+
   // 显示消息
   const showMessage = (type: 'success' | 'error' | 'info', text: string) => {
     setMessage({ type, text });
@@ -448,6 +462,24 @@ export default function ProjectScriptPage() {
     loadScript();
   }, [projectId]);
 
+  // 监听解析进度
+  useEffect(() => {
+    const unsubscribe = window.electron.on('script:parse-progress', (...args: unknown[]) => {
+      const data = args[0] as ParseProgress;
+      console.log('[Script] 收到解析进度:', data);
+      setParseProgress(data);
+
+      // 当完成时，3秒后清除进度
+      if (data.stage === 'completed' || data.stage === 'phase1_complete' || data.stage === 'phase2_complete') {
+        setTimeout(() => setParseProgress(null), 3000);
+      }
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
   // 保存剧本
   const handleSave = useCallback(async () => {
     if (isSaving) return;
@@ -473,6 +505,7 @@ export default function ProjectScriptPage() {
 
     try {
       setParseStage('phase1');
+      setParseProgress(null); // 清除之前的进度
       showMessage('info', 'AI 正在分析剧本结构...');
 
       // 先保存剧本
@@ -503,6 +536,7 @@ export default function ProjectScriptPage() {
 
     try {
       setParseStage('phase2');
+      setParseProgress(null); // 清除之前的进度
       showMessage('info', 'AI 正在生成详细分镜...');
 
       const shots: EnhancedShot[] = await window.electron.invoke('script:parse-phase2', rawScript, phase1Result);
@@ -526,40 +560,60 @@ export default function ProjectScriptPage() {
 
     try {
       setIsGeneratingShots(true);
-      showMessage('info', '正在保存角色、场景和分镜...');
+
+      // 计算总任务数：新角色 + 场景 + 分镜
+      const existingCharacters: Array<{ id: string; name: string }> =
+        await window.electron.invoke('character:list', projectId) || [];
+      const existingCharacterNames = new Set(existingCharacters.map(c => c.name));
+      const newCharacters = phase1Result.characters.filter(c => !existingCharacterNames.has(c.name));
+
+      const totalTasks = newCharacters.length + phase1Result.sceneLocations.length + phase2Shots.length;
+      let completedTasks = 0;
 
       // 1. 创建角色
       const characterMap = new Map<string, string>();
-      const existingCharacters: Array<{ id: string; name: string }> =
-        await window.electron.invoke('character:list', projectId) || [];
-
       for (const char of existingCharacters) {
         characterMap.set(char.name, char.id);
       }
 
-      for (const char of phase1Result.characters) {
-        if (!characterMap.has(char.name)) {
-          try {
-            const newId = await window.electron.invoke('character:create', projectId, {
-              name: char.name,
-              role: char.role,
-              description: char.description,
-              appearance: char.appearance || '',
-            });
-            characterMap.set(char.name, newId);
-          } catch (e) {
-            console.error(`创建角色 ${char.name} 失败:`, e);
-          }
+      for (const char of newCharacters) {
+        setSaveProgress({
+          current: completedTasks,
+          total: totalTasks,
+          message: `正在创建角色：${char.name}`,
+        });
+        try {
+          const newId = await window.electron.invoke('character:create', projectId, {
+            name: char.name,
+            role: char.role,
+            description: char.description,
+            appearance: char.appearance || '',
+          });
+          characterMap.set(char.name, newId);
+          completedTasks++;
+          setSaveProgress({
+            current: completedTasks,
+            total: totalTasks,
+            message: `角色「${char.name}」创建完成`,
+          });
+        } catch (e) {
+          console.error(`创建角色 ${char.name} 失败:`, e);
+          completedTasks++;
         }
       }
 
       // 2. 创建场景
       const sceneMap = new Map<string, string>();
       console.log('[handleConfirmAndSave] 开始创建场景, 场景数量:', phase1Result.sceneLocations.length);
-      console.log('[handleConfirmAndSave] 场景列表:', phase1Result.sceneLocations);
 
-      for (const scene of phase1Result.sceneLocations) {
-        console.log('[handleConfirmAndSave] 正在创建场景:', scene.name);
+      for (let i = 0; i < phase1Result.sceneLocations.length; i++) {
+        const scene = phase1Result.sceneLocations[i];
+        setSaveProgress({
+          current: completedTasks,
+          total: totalTasks,
+          message: `正在创建场景 ${i + 1}/${phase1Result.sceneLocations.length}：${scene.name}`,
+        });
+
         try {
           const dbSceneId = await window.electron.invoke('scene:create', projectId, {
             name: scene.name,
@@ -577,15 +631,50 @@ export default function ProjectScriptPage() {
           if (scene.sceneInfo) {
             sceneMap.set(scene.sceneInfo, dbSceneId);
           }
+          completedTasks++;
+          setSaveProgress({
+            current: completedTasks,
+            total: totalTasks,
+            message: `场景「${scene.name}」创建完成`,
+          });
         } catch (e) {
           console.error(`创建场景 ${scene.name} 失败:`, e);
+          completedTasks++;
         }
       }
       console.log('[handleConfirmAndSave] 场景创建完成, sceneMap:', [...sceneMap.entries()]);
 
-      // 3. 创建分镜
-      const shotsData = phase2Shots.map((shot, index) => {
-        const characterId = shot.character ? characterMap.get(shot.character) : undefined;
+      // 3. 逐个创建分镜（以便显示进度）
+      for (let i = 0; i < phase2Shots.length; i++) {
+        const shot = phase2Shots[i];
+        setSaveProgress({
+          current: completedTasks,
+          total: totalTasks,
+          message: `正在创建分镜 ${i + 1}/${phase2Shots.length}`,
+        });
+
+        // 收集所有相关角色（优先使用 characters 数组，回退到 character + targetCharacter）
+        const characterIds: string[] = [];
+        if (shot.characters && shot.characters.length > 0) {
+          // 使用 AI 返回的 characters 数组
+          for (const charName of shot.characters) {
+            if (characterMap.has(charName)) {
+              characterIds.push(characterMap.get(charName)!);
+            }
+          }
+        } else {
+          // 回退到旧逻辑：character + targetCharacter
+          if (shot.character && characterMap.has(shot.character)) {
+            characterIds.push(characterMap.get(shot.character)!);
+          }
+          if (shot.targetCharacter && characterMap.has(shot.targetCharacter)) {
+            const targetId = characterMap.get(shot.targetCharacter)!;
+            if (!characterIds.includes(targetId)) {
+              characterIds.push(targetId);
+            }
+          }
+        }
+
         let dbSceneId: string | undefined;
         if (shot.sceneId && sceneMap.has(shot.sceneId)) {
           dbSceneId = sceneMap.get(shot.sceneId);
@@ -593,37 +682,55 @@ export default function ProjectScriptPage() {
           dbSceneId = sceneMap.get(shot.sceneInfo);
         }
 
-        return {
-          index,
-          description: shot.description,
-          dialogue: shot.dialogue,
-          characterId,
-          sceneId: dbSceneId,
-          duration: shot.duration || 5,
-          cameraType: shot.cameraType || '中景',
-          mood: shot.mood || '平静',
-          sceneInfo: shot.sceneInfo,
-          location: shot.location,
-          timeOfDay: shot.timeOfDay,
-          props: shot.props,
-          action: shot.action,
-        };
-      });
-
-      await window.electron.invoke('storyboard:create-batch', projectId, shotsData);
+        try {
+          await window.electron.invoke('storyboard:create', projectId, {
+            index: i,
+            description: shot.description,
+            dialogue: shot.dialogue,
+            characterId: characterIds.length > 0 ? characterIds[0] : undefined, // 向后兼容
+            characterIds: characterIds.length > 0 ? characterIds : undefined, // 多角色数组
+            sceneId: dbSceneId,
+            duration: shot.duration || 5,
+            cameraType: shot.cameraType || '中景',
+            mood: shot.mood || '平静',
+            sceneInfo: shot.sceneInfo,
+            location: shot.location,
+            timeOfDay: shot.timeOfDay,
+            props: shot.props,
+            action: shot.action,
+          });
+          completedTasks++;
+          setSaveProgress({
+            current: completedTasks,
+            total: totalTasks,
+            message: `分镜 #${i + 1} 创建完成`,
+          });
+        } catch (e) {
+          console.error(`创建分镜 ${i + 1} 失败:`, e);
+          completedTasks++;
+        }
+      }
 
       // 保存剧本
       await window.electron.invoke('script:save', projectId, rawScript);
 
-      showMessage('success', `已创建 ${phase1Result.characters.length} 个角色，${phase1Result.sceneLocations.length} 个场景，${phase2Shots.length} 个分镜`);
+      setSaveProgress({
+        current: totalTasks,
+        total: totalTasks,
+        message: '全部保存完成！',
+      });
+
+      showMessage('success', `已创建 ${newCharacters.length} 个角色，${phase1Result.sceneLocations.length} 个场景，${phase2Shots.length} 个分镜`);
 
       // 跳转到分镜页面
       setTimeout(() => {
+        setSaveProgress(null);
         navigate({ to: '/project/$projectId/storyboard', params: { projectId } });
-      }, 1000);
+      }, 1500);
     } catch (error) {
       console.error('保存失败:', error);
       showMessage('error', error instanceof Error ? error.message : '保存失败');
+      setSaveProgress(null);
     } finally {
       setIsGeneratingShots(false);
     }
@@ -1013,21 +1120,56 @@ export default function ProjectScriptPage() {
                 )}
 
                 {parseStage === 'phase2' && (
-                  <div className="text-center py-4">
-                    <PixelLoading size="sm" text="正在生成分镜..." />
+                  <div className="py-4 space-y-3">
+                    <div className="flex justify-center">
+                      <PixelLoading size="sm" />
+                    </div>
+                    {parseProgress ? (
+                      <div className="space-y-2">
+                        <p className="text-sm text-text-primary text-center">{parseProgress.message}</p>
+                        <div className="w-full h-2 bg-bg-tertiary border border-border overflow-hidden">
+                          <div
+                            className="h-full bg-primary-main transition-all duration-500"
+                            style={{ width: `${parseProgress.progress}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-text-muted text-center">{parseProgress.progress}%</p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-text-muted text-center">正在生成分镜...</p>
+                    )}
                   </div>
                 )}
 
                 {parseStage === 'complete' && (
-                  <PixelButton
-                    variant="primary"
-                    fullWidth
-                    leftIcon={<IconBolt size={14} />}
-                    onClick={handleConfirmAndSave}
-                    loading={isGeneratingShots}
-                  >
-                    确认并保存
-                  </PixelButton>
+                  <>
+                    <PixelButton
+                      variant="primary"
+                      fullWidth
+                      leftIcon={<IconBolt size={14} />}
+                      onClick={handleConfirmAndSave}
+                      loading={isGeneratingShots}
+                      disabled={isGeneratingShots}
+                    >
+                      确认并保存
+                    </PixelButton>
+
+                    {/* 保存进度显示 */}
+                    {isGeneratingShots && saveProgress && (
+                      <div className="mt-4 space-y-2">
+                        <p className="text-sm text-text-primary text-center">{saveProgress.message}</p>
+                        <div className="w-full h-2 bg-bg-tertiary border border-border overflow-hidden">
+                          <div
+                            className="h-full bg-primary-main transition-all duration-300"
+                            style={{ width: `${Math.round((saveProgress.current / saveProgress.total) * 100)}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-text-muted text-center">
+                          {saveProgress.current}/{saveProgress.total} ({Math.round((saveProgress.current / saveProgress.total) * 100)}%)
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 <p className="text-xs text-text-muted text-center">
@@ -1116,8 +1258,22 @@ export default function ProjectScriptPage() {
 
           <PixelCard padding="none" className="flex-1 min-h-0 flex flex-col overflow-hidden">
             {parseStage === 'phase1' ? (
-              <div className="flex-1 flex items-center justify-center">
-                <PixelLoading size="lg" text="AI 正在分析剧本结构..." />
+              <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8">
+                <PixelLoading size="lg" />
+                {parseProgress ? (
+                  <div className="w-full max-w-md space-y-2">
+                    <p className="text-sm text-text-primary text-center">{parseProgress.message}</p>
+                    <div className="w-full h-3 bg-bg-tertiary border border-border overflow-hidden">
+                      <div
+                        className="h-full bg-primary-main transition-all duration-500"
+                        style={{ width: `${parseProgress.progress}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-text-muted text-center">{parseProgress.progress}%</p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-text-muted">AI 正在分析剧本结构...</p>
+                )}
               </div>
             ) : (
               <textarea

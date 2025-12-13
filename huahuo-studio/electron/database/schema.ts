@@ -64,7 +64,8 @@ export const shots = sqliteTable('shots', {
   index: integer('index').notNull(), // 分镜序号
   description: text('description').notNull(), // 画面描述
   dialogue: text('dialogue'), // 对话/旁白
-  characterId: text('character_id').references(() => characters.id, { onDelete: 'set null' }),
+  characterId: text('character_id').references(() => characters.id, { onDelete: 'set null' }), // 向后兼容：单角色
+  characterIds: text('character_ids'), // JSON数组：支持多角色，如 '["id1","id2"]'
   duration: real('duration').notNull().default(3), // 时长（秒）
   cameraType: text('camera_type'), // 镜头类型: wide | medium | close | extreme_close
   mood: text('mood'), // 情绪氛围

@@ -109,6 +109,7 @@ function createTables() {
       description TEXT NOT NULL,
       dialogue TEXT,
       character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
+      character_ids TEXT,
       duration REAL NOT NULL DEFAULT 3,
       camera_type TEXT,
       mood TEXT,
@@ -156,9 +157,27 @@ function createTables() {
   // 运行数据库迁移（添加新字段到已存在的表）
   runMigrations();
 
-  // 输出 scenes 表结构用于调试
+  // 输出所有表结构用于调试
   const scenesColumns = sqlite.prepare("PRAGMA table_info(scenes)").all() as Array<{ name: string; type: string }>;
   console.log('[Database] scenes 表结构:', scenesColumns.map(c => `${c.name}(${c.type})`).join(', '));
+  console.log('[Database] scenes 表列数:', scenesColumns.length);
+
+  // 验证 Drizzle schema 期望的列与实际表列是否匹配
+  const expectedSceneColumns = ['id', 'project_id', 'name', 'scene_info', 'location', 'time_of_day', 'interior', 'description', 'props', 'lighting', 'atmosphere', 'image_path', 'created_at', 'updated_at'];
+  const actualSceneColumns = scenesColumns.map(c => c.name);
+  const missingColumns = expectedSceneColumns.filter(col => !actualSceneColumns.includes(col));
+  if (missingColumns.length > 0) {
+    console.warn('[Database] scenes 表缺少列:', missingColumns.join(', '));
+    // 尝试添加缺少的列
+    for (const col of missingColumns) {
+      try {
+        sqlite.exec(`ALTER TABLE scenes ADD COLUMN ${col} TEXT`);
+        console.log(`[Database] 已添加缺失的列: ${col}`);
+      } catch (e) {
+        console.error(`[Database] 无法添加列 ${col}:`, e);
+      }
+    }
+  }
 }
 
 /**
@@ -191,6 +210,7 @@ function runMigrations() {
     { name: 'props', type: 'TEXT' },
     { name: 'action', type: 'TEXT' },
     { name: 'scene_id', type: 'TEXT REFERENCES scenes(id) ON DELETE SET NULL' },
+    { name: 'character_ids', type: 'TEXT' }, // 新增：多角色ID数组（JSON格式）
   ];
 
   for (const col of newShotColumns) {
@@ -247,6 +267,13 @@ export function getDatabase(): ReturnType<typeof drizzle> {
     return initDatabase();
   }
   return db;
+}
+
+/**
+ * 获取原始 SQLite 实例（用于调试）
+ */
+export function getSqlite(): Database.Database | null {
+  return sqlite;
 }
 
 /**

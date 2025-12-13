@@ -453,15 +453,23 @@ export function registerIpcHandlers() {
       _,
       projectId: string,
       data: {
+        index?: number;
         description: string;
         dialogue?: string;
         characterId?: string;
+        characterIds?: string[];
+        sceneId?: string;
         duration?: number;
         cameraType?: string;
         mood?: string;
+        sceneInfo?: string;
+        location?: string;
+        timeOfDay?: string;
+        props?: string;
+        action?: string;
       }
     ) => {
-      return await createShot({ projectId, index: 0, ...data } as any);
+      return await createShot({ projectId, index: data.index || 0, ...data });
     }
   );
 
