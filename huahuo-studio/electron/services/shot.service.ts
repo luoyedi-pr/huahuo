@@ -111,27 +111,87 @@ export async function createShot(data: {
   const id = generateId();
   const now = new Date().toISOString();
 
-  await db.insert(shots).values({
+  // 构建插入数据（确保所有值都是明确的）
+  const insertData = {
     id,
     projectId: data.projectId,
-    sceneId: data.sceneId || null,
+    sceneId: data.sceneId ?? null,
     index: data.index,
-    description: data.description,
-    dialogue: data.dialogue || null,
-    characterId: data.characterId || null,
+    description: data.description || '',
+    dialogue: data.dialogue ?? null,
+    characterId: data.characterId ?? null,
     characterIds: data.characterIds ? JSON.stringify(data.characterIds) : null,
-    duration: data.duration || 3,
-    cameraType: data.cameraType || null,
-    mood: data.mood || null,
-    sceneInfo: data.sceneInfo || null,
-    location: data.location || null,
-    timeOfDay: data.timeOfDay || null,
-    props: data.props || null,
-    action: data.action || null,
-    status: 'empty',
+    duration: data.duration ?? 3,
+    cameraType: data.cameraType ?? null,
+    mood: data.mood ?? null,
+    sceneInfo: data.sceneInfo ?? null,
+    location: data.location ?? null,
+    timeOfDay: data.timeOfDay ?? null,
+    props: data.props ?? null,
+    action: data.action ?? null,
+    status: 'empty' as const,
     createdAt: now,
     updatedAt: now,
+  };
+
+  console.log('[createShot] 准备插入分镜:', {
+    id,
+    projectId: data.projectId,
+    index: data.index,
+    hasSceneId: !!data.sceneId,
+    hasCharacterIds: !!data.characterIds,
+    fieldCount: Object.keys(insertData).length,
   });
+
+  try {
+    await db.insert(shots).values(insertData);
+    console.log('[createShot] 分镜创建成功:', id);
+  } catch (error: any) {
+    console.error('[createShot] 分镜创建失败:', error.message);
+    console.error('[createShot] 插入数据:', JSON.stringify(insertData, null, 2));
+
+    // 尝试使用原始 SQL 作为回退
+    if (error.message?.includes('parameter values')) {
+      console.log('[createShot] 尝试使用原始 SQL 插入...');
+      try {
+        const { getSqlite } = await import('../database');
+        const sqlite = getSqlite();
+        if (sqlite) {
+          const stmt = sqlite.prepare(`
+            INSERT INTO shots (id, project_id, scene_id, "index", description, dialogue, character_id, character_ids, duration, camera_type, mood, scene_info, location, time_of_day, props, action, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          stmt.run(
+            insertData.id,
+            insertData.projectId,
+            insertData.sceneId,
+            insertData.index,
+            insertData.description,
+            insertData.dialogue,
+            insertData.characterId,
+            insertData.characterIds,
+            insertData.duration,
+            insertData.cameraType,
+            insertData.mood,
+            insertData.sceneInfo,
+            insertData.location,
+            insertData.timeOfDay,
+            insertData.props,
+            insertData.action,
+            insertData.status,
+            insertData.createdAt,
+            insertData.updatedAt
+          );
+          console.log('[createShot] 原始 SQL 插入成功');
+          await touchProject(data.projectId);
+          return id;
+        }
+      } catch (rawError: any) {
+        console.error('[createShot] 原始 SQL 插入也失败:', rawError.message);
+      }
+    }
+    throw error;
+  }
 
   await touchProject(data.projectId);
   return id;

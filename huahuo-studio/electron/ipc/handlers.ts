@@ -469,7 +469,24 @@ export function registerIpcHandlers() {
         action?: string;
       }
     ) => {
-      return await createShot({ projectId, index: data.index || 0, ...data });
+      // 只提取支持的字段，避免传递多余字段导致 Drizzle 错误
+      return await createShot({
+        projectId,
+        index: data.index || 0,
+        description: data.description,
+        dialogue: data.dialogue,
+        characterId: data.characterId,
+        characterIds: data.characterIds,
+        sceneId: data.sceneId,
+        duration: data.duration,
+        cameraType: data.cameraType,
+        mood: data.mood,
+        sceneInfo: data.sceneInfo,
+        location: data.location,
+        timeOfDay: data.timeOfDay,
+        props: data.props,
+        action: data.action,
+      });
     }
   );
 

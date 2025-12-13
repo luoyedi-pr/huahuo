@@ -420,6 +420,14 @@ export default function ProjectScriptPage() {
   // 保存进度状态（用于显示创建角色、场景、分镜的进度）
   const [saveProgress, setSaveProgress] = useState<{ current: number; total: number; message: string } | null>(null);
 
+  // 等待 UI 更新的辅助函数
+  const waitForUIUpdate = () => new Promise<void>(resolve => {
+    // 使用 requestAnimationFrame 确保 UI 有时间更新
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+
   // 显示消息
   const showMessage = (type: 'success' | 'error' | 'info', text: string) => {
     setMessage({ type, text });
@@ -466,7 +474,7 @@ export default function ProjectScriptPage() {
   useEffect(() => {
     const unsubscribe = window.electron.on('script:parse-progress', (...args: unknown[]) => {
       const data = args[0] as ParseProgress;
-      console.log('[Script] 收到解析进度:', data);
+      console.log('[Script] 收到解析进度:', data, '当前 parseStage:', parseStage);
       setParseProgress(data);
 
       // 当完成时，3秒后清除进度
@@ -478,7 +486,7 @@ export default function ProjectScriptPage() {
     return () => {
       unsubscribe?.();
     };
-  }, []);
+  }, [parseStage]);
 
   // 保存剧本
   const handleSave = useCallback(async () => {
@@ -582,6 +590,7 @@ export default function ProjectScriptPage() {
           total: totalTasks,
           message: `正在创建角色：${char.name}`,
         });
+        await waitForUIUpdate(); // 等待 UI 更新
         try {
           const newId = await window.electron.invoke('character:create', projectId, {
             name: char.name,
@@ -613,6 +622,7 @@ export default function ProjectScriptPage() {
           total: totalTasks,
           message: `正在创建场景 ${i + 1}/${phase1Result.sceneLocations.length}：${scene.name}`,
         });
+        await waitForUIUpdate(); // 等待 UI 更新
 
         try {
           const dbSceneId = await window.electron.invoke('scene:create', projectId, {
@@ -652,6 +662,7 @@ export default function ProjectScriptPage() {
           total: totalTasks,
           message: `正在创建分镜 ${i + 1}/${phase2Shots.length}`,
         });
+        await waitForUIUpdate(); // 等待 UI 更新
 
         // 收集所有相关角色（优先使用 characters 数组，回退到 character + targetCharacter）
         const characterIds: string[] = [];
@@ -1119,7 +1130,8 @@ export default function ProjectScriptPage() {
                   </PixelButton>
                 )}
 
-                {parseStage === 'phase2' && (
+                {/* 显示 phase2 进度条：当 parseStage 为 phase2 或收到 phase2 相关的进度事件时 */}
+                {(parseStage === 'phase2' || (parseProgress && parseProgress.stage.startsWith('phase2'))) && (
                   <div className="py-4 space-y-3">
                     <div className="flex justify-center">
                       <PixelLoading size="sm" />
@@ -1257,7 +1269,8 @@ export default function ProjectScriptPage() {
           </div>
 
           <PixelCard padding="none" className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {parseStage === 'phase1' ? (
+            {/* 显示进度条：当 parseStage 为 phase1 或收到 phase1 相关的进度事件时 */}
+            {(parseStage === 'phase1' || (parseProgress && parseProgress.stage.startsWith('phase1'))) ? (
               <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8">
                 <PixelLoading size="lg" />
                 {parseProgress ? (
