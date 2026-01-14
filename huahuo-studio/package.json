@@ -6,7 +6,7 @@
   "author": "Huahuo Team",
   "license": "MIT",
   "scripts": {
-    "dev": "vite",
+    "dev": "chcp 65001 >nul 2>&1 && vite || vite",
     "dev:win": "chcp 65001 >nul && vite",
     "build": "tsc && vite build && electron-builder",
     "preview": "vite preview",

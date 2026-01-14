@@ -137,80 +137,41 @@ export async function createScene(data: {
 
   console.log(`[createScene] 创建新场景 "${data.name}"，ID: ${id}`);
 
-  // 只包含数据库支持的字段，避免多余字段
-  const insertData = {
-    id,
-    projectId: data.projectId,
-    name: data.name,
-    sceneInfo: data.sceneInfo || null,
-    location: data.location || null,
-    timeOfDay: data.timeOfDay || null,
-    interior: data.interior ?? true,
-    description: data.description || null,
-    props: data.props || null,
-    lighting: data.lighting || null,
-    atmosphere: data.atmosphere || null,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  console.log(`[createScene] 插入数据:`, JSON.stringify({
-    字段数: Object.keys(insertData).length,
-    字段列表: Object.keys(insertData),
-    projectId: data.projectId,
-    name: data.name,
-  }));
-
+  // 使用原始 SQL 插入，绕过 Drizzle 可能存在的问题
   try {
-    await db.insert(scenes).values(insertData);
-  } catch (error: any) {
-    console.error(`[createScene] Drizzle 插入失败:`, error.message);
-    console.error(`[createScene] 插入数据详情:`, JSON.stringify(insertData, null, 2));
+    const { getSqlite } = await import('../database');
+    const sqlite = getSqlite();
+    
+    if (sqlite) {
+      const stmt = sqlite.prepare(`
+        INSERT INTO scenes (id, project_id, name, scene_info, location, time_of_day, interior, description, props, lighting, atmosphere, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      
+      const propsStr = data.props ? (typeof data.props === 'string' ? data.props : JSON.stringify(data.props)) : null;
 
-    // 如果是 "Too many parameter values" 错误，尝试使用原始 SQL
-    if (error.message?.includes('parameter values')) {
-      console.log(`[createScene] 尝试使用原始 SQL 插入...`);
-      try {
-        const { getSqlite } = await import('../database');
-        const sqlite = getSqlite();
-        if (sqlite) {
-          // 先检查表结构
-          const columns = sqlite.prepare('PRAGMA table_info(scenes)').all() as Array<{ name: string }>;
-          const columnNames = columns.map(c => c.name);
-          console.log(`[createScene] scenes 表实际列: ${columnNames.join(', ')}`);
-
-          // 使用原始 SQL 插入，只插入表中存在的列
-          const stmt = sqlite.prepare(`
-            INSERT INTO scenes (id, project_id, name, scene_info, location, time_of_day, interior, description, props, lighting, atmosphere, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `);
-          stmt.run(
-            id,
-            data.projectId,
-            data.name,
-            data.sceneInfo || null,
-            data.location || null,
-            data.timeOfDay || null,
-            (data.interior ?? true) ? 1 : 0,
-            data.description || null,
-            data.props || null,
-            data.lighting || null,
-            data.atmosphere || null,
-            now,
-            now
-          );
-          console.log(`[createScene] 原始 SQL 插入成功`);
-
-          await touchProject(data.projectId);
-          return id;
-        }
-      } catch (rawError: any) {
-        console.error(`[createScene] 原始 SQL 插入也失败:`, rawError.message);
-        throw rawError;
-      }
+      stmt.run(
+        id,
+        data.projectId,
+        data.name,
+        data.sceneInfo || null,
+        data.location || null,
+        data.timeOfDay || null,
+        (data.interior ?? true) ? 1 : 0,
+        data.description || null,
+        propsStr,
+        data.lighting || null,
+        data.atmosphere || null,
+        now,
+        now
+      );
+      console.log(`[createScene] SQL 插入成功`);
+    } else {
+      throw new Error('Database instance not found (getSqlite returned null)');
     }
-
-    throw error;
+  } catch (error: any) {
+    console.error(`[createScene] SQL 插入失败:`, error);
+    throw error; // 直接抛出原始错误，不再降级到 Drizzle，以便排查根本原因
   }
 
   await touchProject(data.projectId);

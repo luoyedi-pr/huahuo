@@ -10,6 +10,13 @@ import { getAllSettings } from '../services/settings.service';
 
 // Windows 控制台 UTF-8 编码设置
 if (process.platform === 'win32') {
+  // 尝试设置控制台代码页为 UTF-8 (65001)
+  try {
+    require('child_process').execSync('chcp 65001');
+  } catch (e) {
+    console.warn('Failed to set console code page to UTF-8');
+  }
+
   // 设置控制台输出编码为 UTF-8
   if (process.stdout && process.stdout.isTTY) {
     process.stdout.setDefaultEncoding('utf8');

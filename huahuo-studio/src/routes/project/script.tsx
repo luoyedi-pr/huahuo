@@ -559,6 +559,103 @@ export default function ProjectScriptPage() {
     }
   }, [rawScript, phase1Result]);
 
+  // 仅保存角色和场景（跳过分镜生成）
+  const handleSaveCharactersAndScenes = useCallback(async () => {
+    if (!phase1Result) return;
+
+    try {
+      setIsGeneratingShots(true);
+      const totalTasks = phase1Result.characters.length + phase1Result.sceneLocations.length;
+      let completedTasks = 0;
+
+      // 1. 创建角色
+      const newCharacters = [];
+      console.log('[handleSaveCharactersAndScenes] 开始创建角色, 数量:', phase1Result.characters.length);
+
+      for (let i = 0; i < phase1Result.characters.length; i++) {
+        const char = phase1Result.characters[i];
+        setSaveProgress({
+          current: completedTasks,
+          total: totalTasks,
+          message: `正在创建角色 ${i + 1}/${phase1Result.characters.length}：${char.name}`,
+        });
+        await waitForUIUpdate();
+
+        try {
+          const newId = await window.electron.invoke('character:create', projectId, {
+            name: char.name,
+            role: char.role,
+            description: char.description,
+            appearance: char.appearance,
+            gender: char.gender,
+            ageGroup: char.ageGroup,
+            estimatedAge: char.estimatedAge,
+            personality: char.personality,
+            background: char.background,
+            relationships: char.relationships,
+          });
+          newCharacters.push(newId);
+          completedTasks++;
+        } catch (e) {
+          console.error(`创建角色 ${char.name} 失败:`, e);
+          completedTasks++;
+        }
+      }
+
+      // 2. 创建场景
+      console.log('[handleSaveCharactersAndScenes] 开始创建场景, 数量:', phase1Result.sceneLocations.length);
+
+      for (let i = 0; i < phase1Result.sceneLocations.length; i++) {
+        const scene = phase1Result.sceneLocations[i];
+        setSaveProgress({
+          current: completedTasks,
+          total: totalTasks,
+          message: `正在创建场景 ${i + 1}/${phase1Result.sceneLocations.length}：${scene.name}`,
+        });
+        await waitForUIUpdate();
+
+        try {
+          await window.electron.invoke('scene:create', projectId, {
+            name: scene.name,
+            sceneInfo: scene.sceneInfo,
+            location: scene.location,
+            timeOfDay: scene.timeOfDay,
+            interior: scene.interior,
+            description: scene.description,
+            props: scene.props,
+            lighting: scene.lighting,
+            atmosphere: scene.atmosphere,
+          });
+          completedTasks++;
+        } catch (e) {
+          console.error(`创建场景 ${scene.name} 失败:`, e);
+          completedTasks++;
+        }
+      }
+
+      setSaveProgress({
+        current: totalTasks,
+        total: totalTasks,
+        message: '角色和场景保存完成！',
+      });
+
+      showMessage('success', `已创建 ${newCharacters.length} 个角色和 ${phase1Result.sceneLocations.length} 个场景`);
+
+      // 跳转到角色页面
+      setTimeout(() => {
+        setSaveProgress(null);
+        navigate({ to: '/project/$projectId/characters', params: { projectId } });
+      }, 1500);
+
+    } catch (error) {
+      console.error('保存失败:', error);
+      showMessage('error', '保存失败');
+      setSaveProgress(null);
+    } finally {
+      setIsGeneratingShots(false);
+    }
+  }, [projectId, phase1Result, navigate]);
+
   // 确认并保存到数据库
   const handleConfirmAndSave = useCallback(async () => {
     if (!phase1Result || phase2Shots.length === 0) {
@@ -1120,14 +1217,26 @@ export default function ProjectScriptPage() {
               <h3 className="font-pixel text-sm text-text-primary mb-4">操作</h3>
               <div className="space-y-3">
                 {parseStage === 'confirm' && (
-                  <PixelButton
-                    variant="secondary"
-                    fullWidth
-                    leftIcon={<IconMagic size={14} />}
-                    onClick={handlePhase2Parse}
-                  >
-                    生成分镜
-                  </PixelButton>
+                  <>
+                    <PixelButton
+                      variant="secondary"
+                      fullWidth
+                      leftIcon={<IconMagic size={14} />}
+                      onClick={handlePhase2Parse}
+                    >
+                      生成分镜
+                    </PixelButton>
+
+                    <PixelButton
+                      variant="default"
+                      fullWidth
+                      leftIcon={<IconSave size={14} />}
+                      onClick={handleSaveCharactersAndScenes}
+                      disabled={isGeneratingShots}
+                    >
+                      仅保存角色/场景
+                    </PixelButton>
+                  </>
                 )}
 
                 {/* 显示 phase2 进度条：当 parseStage 为 phase2 或收到 phase2 相关的进度事件时 */}

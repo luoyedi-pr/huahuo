@@ -153,7 +153,8 @@ async function electronFetch(
     timeout?: number;
   } = {}
 ): Promise<{ ok: boolean; status: number; text: () => Promise<string>; json: () => Promise<any> }> {
-  const timeoutMs = options.timeout || 120000;
+  // 增加默认超时时间到 5 分钟 (300000ms)，以支持长剧本生成
+  const timeoutMs = options.timeout || 300000;
 
   // 首先尝试使用 Node.js 原生 fetch
   try {
@@ -177,13 +178,14 @@ async function electronFetch(
       json: async () => JSON.parse(responseText),
     };
   } catch (fetchError: any) {
-    console.log('[AI Service] Node.js fetch 失败，尝试使用 Electron net:', fetchError.message);
+    console.log(`[AI Service] Node.js fetch 失败 (${fetchError.message})，切换到 Electron net 模块...`);
 
     // 回退到 Electron net 模块
     return new Promise((resolve, reject) => {
       let timeoutId: NodeJS.Timeout;
 
       try {
+        console.log(`[AI Service] Electron net 开始请求: ${url}`);
         const request = net.request({
           method: options.method || 'GET',
           url,
@@ -201,12 +203,14 @@ async function electronFetch(
 
         // 超时处理
         timeoutId = setTimeout(() => {
+          console.error('[AI Service] Electron net 请求超时');
           request.abort();
-          reject(new Error('请求超时'));
+          reject(new Error(`请求超时 (${timeoutMs}ms)`));
         }, timeoutMs);
 
         request.on('response', (response) => {
           statusCode = response.statusCode;
+          console.log(`[AI Service] Electron net 收到响应: ${statusCode}`);
 
           response.on('data', (chunk) => {
             responseData += chunk.toString();
@@ -214,6 +218,7 @@ async function electronFetch(
 
           response.on('end', () => {
             clearTimeout(timeoutId);
+            console.log(`[AI Service] Electron net 响应接收完成，长度: ${responseData.length}`);
             resolve({
               ok: statusCode >= 200 && statusCode < 300,
               status: statusCode,
@@ -223,12 +228,14 @@ async function electronFetch(
           });
 
           response.on('error', (error) => {
+            console.error('[AI Service] Electron net 响应读取错误:', error);
             clearTimeout(timeoutId);
             reject(error);
           });
         });
 
         request.on('error', (error) => {
+          console.error('[AI Service] Electron net 请求错误:', error);
           clearTimeout(timeoutId);
           reject(error);
         });
@@ -240,6 +247,7 @@ async function electronFetch(
 
         request.end();
       } catch (error) {
+        console.error('[AI Service] Electron net 初始化异常:', error);
         clearTimeout(timeoutId!);
         reject(error);
       }
